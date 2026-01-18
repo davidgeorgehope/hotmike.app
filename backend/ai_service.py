@@ -1,12 +1,22 @@
 import base64
+import os
+import uuid
 from typing import Optional
-import google.generativeai as genai
+from pathlib import Path
+
+from google import genai
+from google.genai import types
+
 from config import get_settings, is_ai_available
+
+# Directory for generated images
+GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 
 
 class AIService:
     _instance: Optional['AIService'] = None
     _initialized: bool = False
+    _client: Optional[genai.Client] = None
 
     def __new__(cls) -> 'AIService':
         if cls._instance is None:
@@ -23,7 +33,9 @@ class AIService:
             return False
 
         try:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
+            self._client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            # Ensure images directory exists
+            GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
             self._initialized = True
             return True
         except Exception:
@@ -32,7 +44,7 @@ class AIService:
     @property
     def is_ready(self) -> bool:
         """Check if the AI service is ready to use."""
-        return self._initialized and is_ai_available()
+        return self._initialized and is_ai_available() and self._client is not None
 
     async def transcribe_audio_chunk(self, audio_bytes: bytes, mime_type: str = "audio/webm") -> dict:
         """Transcribe an audio chunk using Gemini."""
@@ -40,21 +52,19 @@ class AIService:
             return {"error": "AI service not available", "text": ""}
 
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-
-            # Create the audio data for Gemini
-            audio_data = {
-                "mime_type": mime_type,
-                "data": base64.b64encode(audio_bytes).decode('utf-8')
-            }
-
-            response = await model.generate_content_async([
-                "Transcribe this audio. Return only the transcribed text, nothing else. If there is no speech, return an empty string.",
-                audio_data
-            ])
+            response = await self._client.aio.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[
+                    types.Part.from_bytes(
+                        data=audio_bytes,
+                        mime_type=mime_type
+                    ),
+                    "Transcribe this audio. Return only the transcribed text, nothing else. If there is no speech, return an empty string."
+                ]
+            )
 
             return {
-                "text": response.text.strip(),
+                "text": response.text.strip() if response.text else "",
                 "error": None
             }
         except Exception as e:
@@ -69,8 +79,6 @@ class AIService:
             return {"error": "AI service not available", "suggestion": None}
 
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-
             prompt = f"""Analyze this transcript from a video recording and suggest a relevant visual/graphic that would enhance the content.
 
 Transcript: "{transcript}"
@@ -81,13 +89,17 @@ Respond in this exact JSON format:
   "should_suggest": true/false,
   "suggestion_text": "Brief description of suggested visual",
   "search_query": "Search terms to find this image",
+  "image_prompt": "Detailed prompt for generating this image with AI (describe the scene, style, composition)",
   "reasoning": "Why this visual would be helpful"
 }}
 
 Only suggest a visual if it would genuinely add value. Return should_suggest: false if the content doesn't warrant a visual."""
 
-            response = await model.generate_content_async(prompt)
-            text = response.text.strip()
+            response = await self._client.aio.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt
+            )
+            text = response.text.strip() if response.text else ""
 
             # Try to parse as JSON
             import json
@@ -117,8 +129,6 @@ Only suggest a visual if it would genuinely add value. Return should_suggest: fa
             return []
 
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-
             prompt = f"""Analyze this transcript window and identify moments that would benefit from visual aids.
 
 Transcript: "{transcript_window}"
@@ -130,6 +140,7 @@ Respond in this exact JSON format:
       "text_snippet": "The part of the transcript",
       "suggestion": "Description of visual to show",
       "search_query": "Search terms for image",
+      "image_prompt": "Detailed prompt for AI image generation",
       "importance": "high/medium/low"
     }}
   ]
@@ -137,8 +148,11 @@ Respond in this exact JSON format:
 
 Only include genuinely useful moments. Return empty moments array if none found."""
 
-            response = await model.generate_content_async(prompt)
-            text = response.text.strip()
+            response = await self._client.aio.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt
+            )
+            text = response.text.strip() if response.text else ""
 
             # Try to parse as JSON
             import json
@@ -154,6 +168,90 @@ Only include genuinely useful moments. Return empty moments array if none found.
             return result.get("moments", [])
         except Exception:
             return []
+
+    async def generate_image(self, prompt: str, aspect_ratio: str = "16:9") -> dict:
+        """Generate an image using Imagen 3."""
+        if not self.is_ready:
+            return {"error": "AI service not available", "image_url": None, "filename": None}
+
+        try:
+            response = await self._client.aio.models.generate_images(
+                model='imagen-3.0-generate-002',
+                prompt=prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio=aspect_ratio,
+                )
+            )
+
+            if not response.generated_images:
+                return {"error": "No image generated", "image_url": None, "filename": None}
+
+            # Get the image data
+            image = response.generated_images[0]
+            image_bytes = image.image.image_bytes
+
+            # Save to file
+            filename = f"{uuid.uuid4()}.png"
+            filepath = GENERATED_IMAGES_DIR / filename
+
+            with open(filepath, 'wb') as f:
+                f.write(image_bytes)
+
+            return {
+                "error": None,
+                "filename": filename,
+                "image_url": f"/api/generated-images/{filename}"
+            }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "image_url": None,
+                "filename": None
+            }
+
+    async def generate_name_card_image(self, name: str, title: Optional[str] = None) -> dict:
+        """Generate a professional name card overlay using AI."""
+        if not self.is_ready:
+            return {"error": "AI service not available", "image_url": None, "filename": None}
+
+        title_text = f", {title}" if title else ""
+        prompt = f"""Create a professional broadcast-quality lower-third name card graphic for video.
+
+Name: {name}{title_text}
+
+Requirements:
+- Modern, clean broadcast TV style lower-third graphic
+- Semi-transparent dark background with subtle gradient
+- Clean white text for the name (prominent)
+- Smaller gray text for the title (if provided)
+- Subtle blue accent line or element
+- Left-aligned text layout
+- Designed for 16:9 video overlay
+- Professional corporate/news broadcast aesthetic
+- High contrast for readability over video
+- No faces or photographs, just typography and design elements"""
+
+        return await self.generate_image(prompt, aspect_ratio="16:9")
+
+    async def generate_visual_from_marker(self, marker_text: str) -> dict:
+        """Generate an image for a [VISUAL:] marker in a talk track."""
+        if not self.is_ready:
+            return {"error": "AI service not available", "image_url": None, "filename": None}
+
+        prompt = f"""Create a professional visual for a video presentation.
+
+Description: {marker_text}
+
+Requirements:
+- High quality, professional image suitable for video overlay
+- Clear, uncluttered composition
+- Good contrast and visibility
+- Appropriate for business/educational presentation
+- 16:9 aspect ratio for video
+- Photorealistic or clean illustration style as appropriate"""
+
+        return await self.generate_image(prompt, aspect_ratio="16:9")
 
 
 # Singleton instance

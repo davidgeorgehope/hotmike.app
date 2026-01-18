@@ -160,6 +160,7 @@ async def transcription_websocket(
 
                 transcript = message.get("transcript", "")
                 context = message.get("context")
+                generate_image = message.get("generate_image", True)
 
                 if not transcript:
                     await manager.send_personal_message({
@@ -180,9 +181,22 @@ async def transcription_websocket(
                         "message": f"Suggestion failed: {result['error']}"
                     }, websocket)
                 elif result.get("suggestion"):
+                    suggestion = result["suggestion"]
+                    image_url = None
+
+                    # Generate image if requested and we have a prompt
+                    if generate_image and suggestion.get("image_prompt"):
+                        image_result = await ai_service.generate_image(
+                            suggestion["image_prompt"],
+                            aspect_ratio="16:9"
+                        )
+                        if image_result.get("image_url"):
+                            image_url = image_result["image_url"]
+
                     await manager.send_personal_message({
                         "type": "suggestion",
-                        "suggestion": result["suggestion"]
+                        "suggestion": suggestion,
+                        "image_url": image_url
                     }, websocket)
                 else:
                     await manager.send_personal_message({

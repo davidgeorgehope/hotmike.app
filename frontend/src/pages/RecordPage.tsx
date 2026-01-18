@@ -6,8 +6,10 @@ import { useAI } from '../contexts/AIContext';
 import { useMediaDevices } from '../hooks/useMediaDevices';
 import { useMediaRecorder } from '../hooks/useMediaRecorder';
 import { useVoiceCommands } from '../hooks/useVoiceCommands';
+import { useTranscriptionWebSocket } from '../hooks/useTranscriptionWebSocket';
 import { Compositor, LayoutMode, PIPShape } from '../lib/compositor';
 import { recordingsApi } from '../lib/api';
+import { generateNameCardImage } from '../lib/nameCardGenerator';
 import { VUMeter } from '../components/VUMeter';
 import { ManualOverlayManager } from '../components/ManualOverlayManager';
 import { TranscriptDisplay } from '../components/TranscriptDisplay';
@@ -29,7 +31,6 @@ export function RecordPage() {
   } = useRecording();
 
   const { webcamStream, screenStream, requestWebcam, requestScreen, stopAll, error: mediaError } = useMediaDevices();
-  const { duration, recordedBlob, startRecording, stopRecording, clearRecording } = useMediaRecorder();
   const {
     isAIAvailable,
     suggestions,
@@ -40,9 +41,20 @@ export function RecordPage() {
     nextSuggestion,
     startSession,
     endSession,
+    sessionId,
   } = useAI();
 
   const [mode, setMode] = useState<Mode>('setup');
+
+  // WebSocket for real-time transcription
+  const { sendAudioChunk } = useTranscriptionWebSocket({
+    enabled: mode === 'recording' && isAIAvailable,
+    sessionId,
+  });
+
+  const { duration, recordedBlob, startRecording, stopRecording, clearRecording } = useMediaRecorder({
+    onDataAvailable: sendAudioChunk,
+  });
   const [title, setTitle] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -193,13 +205,70 @@ export function RecordPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [mode, setLayout, handleInsertSuggestion, handleClearOverlay, nextSuggestion, dismissSuggestion, getCurrentSuggestion]);
 
-  const handleStartRecording = useCallback(() => {
+  const handleStartRecording = useCallback(async () => {
     if (!canvasRef.current) return;
     compositorRef.current?.start();
     startRecording(canvasRef.current, webcamStream, screenStream);
     startSession();
+
+    // Auto-suggest name card overlay if name is set
+    if (nameCardText) {
+      // Add text-only suggestion immediately
+      addSuggestion({
+        text: `Name card: ${nameCardText}`,
+        source: 'prebaked',
+      });
+
+      // Try to generate AI name card in background
+      if (isAIAvailable) {
+        try {
+          const response = await fetch('/api/generate-name-card', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: nameCardText,
+              title: nameCardTitle || undefined,
+            }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.image_url) {
+              // Update suggestion with generated image
+              addSuggestion({
+                text: `Name card: ${nameCardText}`,
+                imageUrl: data.image_url,
+                source: 'prebaked',
+              });
+            }
+          }
+        } catch (err) {
+          // Fallback to canvas generator if AI fails
+          const nameCardImageUrl = generateNameCardImage({
+            name: nameCardText,
+            title: nameCardTitle || undefined,
+          });
+          addSuggestion({
+            text: `Name card: ${nameCardText}`,
+            imageUrl: nameCardImageUrl,
+            source: 'prebaked',
+          });
+        }
+      } else {
+        // Use canvas generator when AI not available
+        const nameCardImageUrl = generateNameCardImage({
+          name: nameCardText,
+          title: nameCardTitle || undefined,
+        });
+        addSuggestion({
+          text: `Name card: ${nameCardText}`,
+          imageUrl: nameCardImageUrl,
+          source: 'prebaked',
+        });
+      }
+    }
+
     setMode('recording');
-  }, [webcamStream, screenStream, startRecording, startSession]);
+  }, [webcamStream, screenStream, startRecording, startSession, nameCardText, nameCardTitle, addSuggestion, isAIAvailable]);
 
   // Set up display video when recording starts
   useEffect(() => {

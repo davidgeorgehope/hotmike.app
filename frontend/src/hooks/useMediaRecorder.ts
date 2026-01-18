@@ -9,6 +9,7 @@ interface RecorderState {
 
 interface UseMediaRecorderOptions {
   onStop?: (blob: Blob, duration: number) => void;
+  onDataAvailable?: (chunk: Blob) => void;
 }
 
 export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
@@ -81,6 +82,10 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
         chunksRef.current.push(e.data);
+        // Stream chunk for real-time transcription
+        if (options.onDataAvailable) {
+          options.onDataAvailable(e.data);
+        }
       }
     };
 

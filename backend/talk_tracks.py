@@ -76,34 +76,33 @@ async def generate_prebaked_visuals(talk_track_id: int, markers: List[dict]):
                 )
                 visual_id = cursor.lastrowid
 
-        # Generate suggestion for this marker (placeholder - in real implementation would generate image)
+        # Generate actual image for this marker
         try:
-            result = await ai_service.generate_suggestion(
-                f"Visual needed for: {marker['text']}",
-                context="This is a prebaked visual for a talk track marker"
-            )
+            result = await ai_service.generate_visual_from_marker(marker["text"])
 
             with get_db() as conn:
                 cursor = conn.cursor()
-                if result.get("suggestion"):
-                    # In a full implementation, we would generate/fetch an image here
-                    # For now, just mark as completed with the search query
+                if result.get("filename"):
+                    # Store the generated image filename
                     cursor.execute(
                         """
                         UPDATE prebaked_visuals
-                        SET status = 'completed', generated_at = CURRENT_TIMESTAMP
+                        SET status = 'completed',
+                            image_filename = ?,
+                            generated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
                         """,
-                        (visual_id,)
+                        (result["filename"], visual_id)
                     )
                 else:
+                    error_msg = result.get("error", "Image generation failed")
                     cursor.execute(
                         """
                         UPDATE prebaked_visuals
-                        SET status = 'failed', error_message = 'No suggestion generated'
+                        SET status = 'failed', error_message = ?
                         WHERE id = ?
                         """,
-                        (visual_id,)
+                        (error_msg, visual_id)
                     )
         except Exception as e:
             with get_db() as conn:
@@ -117,8 +116,8 @@ async def generate_prebaked_visuals(talk_track_id: int, markers: List[dict]):
                     (str(e), visual_id)
                 )
 
-        # Small delay between API calls to avoid rate limiting
-        await asyncio.sleep(1)
+        # Delay between API calls to respect rate limiting
+        await asyncio.sleep(3)
 
 
 @router.post("")
@@ -257,6 +256,7 @@ def get_talk_track(talk_track_id: int, user: dict = Depends(get_current_user)):
                 "marker_text": v["marker_text"],
                 "marker_index": v["marker_index"],
                 "image_filename": v["image_filename"],
+                "image_url": f"/api/generated-images/{v['image_filename']}" if v["image_filename"] else None,
                 "status": v["status"],
                 "error_message": v["error_message"],
                 "generated_at": v["generated_at"],

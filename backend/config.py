@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     AI_CALLS_PER_MINUTE: int = 3
     AI_CALLS_PER_SESSION: int = 20
 
+    # Image generation rate limits
+    IMAGE_GENERATION_PER_MINUTE: int = 2
+    IMAGE_GENERATION_PER_SESSION: int = 10
+
     # App settings
     DEBUG: bool = False
 
