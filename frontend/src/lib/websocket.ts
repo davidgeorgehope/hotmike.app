@@ -61,8 +61,6 @@ type MessageHandler = (message: WebSocketMessage) => void;
 export class TranscriptionWebSocket {
   private ws: WebSocket | null = null;
   private url: string;
-  private token: string;
-  private sessionId: string;
   private handlers: Map<WebSocketMessageType, Set<MessageHandler>> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
@@ -71,9 +69,6 @@ export class TranscriptionWebSocket {
   private isConnecting = false;
 
   constructor(token: string, sessionId: string) {
-    this.token = token;
-    this.sessionId = sessionId;
-
     // Determine WebSocket URL based on current location
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -139,10 +134,6 @@ export class TranscriptionWebSocket {
     if (handlers) {
       handlers.forEach((handler) => handler(message));
     }
-
-    // Also trigger 'all' handlers
-    const allHandlers = this.handlers.get('error'); // Use a common type for all
-    // Actually, let's add a generic handler approach
   }
 
   on(type: WebSocketMessageType, handler: MessageHandler): () => void {
