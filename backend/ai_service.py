@@ -1,10 +1,12 @@
 import base64
+import io
 import json
 import os
 import uuid
 from typing import Optional
 from pathlib import Path
 
+from PIL import Image
 from google import genai
 from google.genai import types
 
@@ -16,6 +18,50 @@ GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 # Model IDs
 IMAGE_MODEL = "gemini-3-pro-image-preview"
 LLM_MODEL = "gemini-3-flash-preview"
+
+
+def chroma_key_and_crop(image_bytes: bytes, tolerance: int = 60) -> bytes:
+    """Remove green background and crop to content."""
+    img = Image.open(io.BytesIO(image_bytes)).convert('RGBA')
+    pixels = img.load()
+    width, height = img.size
+
+    # Find bounding box of non-green pixels and make green transparent
+    min_x, min_y, max_x, max_y = width, height, 0, 0
+
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = pixels[x, y]
+            # Check if pixel is chroma key green (high green, low red/blue)
+            is_green = g > 200 and r < tolerance and b < tolerance
+            if is_green:
+                pixels[x, y] = (0, 0, 0, 0)  # Make transparent
+            else:
+                # Track bounding box of non-green content
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+
+    # Handle edge case: no content found
+    if min_x >= max_x or min_y >= max_y:
+        output = io.BytesIO()
+        img.save(output, format='PNG')
+        return output.getvalue()
+
+    # Add padding
+    padding = 20
+    min_x = max(0, min_x - padding)
+    min_y = max(0, min_y - padding)
+    max_x = min(width, max_x + padding)
+    max_y = min(height, max_y + padding)
+
+    # Crop to content
+    cropped = img.crop((min_x, min_y, max_x, max_y))
+
+    output = io.BytesIO()
+    cropped.save(output, format='PNG')
+    return output.getvalue()
 
 
 class AIService:
@@ -299,26 +345,72 @@ Respond ONLY with valid JSON, no other text:
             }
 
     async def generate_name_card_image(self, name: str, title: Optional[str] = None) -> dict:
-        """Generate a professional name card overlay using AI."""
+        """Generate a professional name card overlay using AI with chroma key processing."""
         if not self.is_ready:
             return {"error": "AI service not available", "image_url": None, "filename": None}
 
-        title_text = f", {title}" if title else ""
-        prompt = f"""Create an isolated lower-third name card graphic.
+        title_text = f"\nTitle: {title}" if title else ""
+        prompt = f"""Create a lower-third name card graphic on a bright green chroma key background.
 
 Name: {name}{title_text}
 
-This is a PNG overlay graphic, NOT a video or scene. Generate ONLY the graphic element itself:
-- Dark semi-transparent rectangular background
-- White text for the name (bold, prominent)
+Requirements:
+- Background MUST be solid bright green (#00FF00) for chroma keying - no gradients
+- The name card graphic should be CENTERED in the image
+- Dark semi-transparent rectangular card with rounded corners
+- White bold text for the name
 - Smaller gray text for the title if provided
-- Subtle accent line or design element
-- Left-aligned text
-- The graphic should be positioned in the lower-left area of the frame
+- Subtle blue or white accent line (NO GREEN in the graphic itself)
 - Clean, professional broadcast TV aesthetic
-- NO background scene, NO video frame, NO person - ONLY the name card graphic itself"""
+- ONLY the name card graphic on pure green background
+- Do NOT use any green colors in the name card design"""
 
-        return await self.generate_image(prompt, aspect_ratio="16:9")
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=IMAGE_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"]
+                )
+            )
+
+            # Extract image from response
+            image_bytes = None
+            if hasattr(response, 'candidates'):
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'inline_data') and part.inline_data:
+                                if hasattr(part.inline_data, 'data') and part.inline_data.data:
+                                    image_bytes = part.inline_data.data
+                                    break
+                    if image_bytes:
+                        break
+
+            if not image_bytes:
+                return {"error": "No image generated", "image_url": None, "filename": None}
+
+            # Process with chroma key removal and cropping
+            processed_bytes = chroma_key_and_crop(image_bytes)
+
+            # Save to file
+            filename = f"{uuid.uuid4()}.png"
+            filepath = GENERATED_IMAGES_DIR / filename
+
+            with open(filepath, 'wb') as f:
+                f.write(processed_bytes)
+
+            return {
+                "error": None,
+                "filename": filename,
+                "image_url": f"/api/generated-images/{filename}"
+            }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "image_url": None,
+                "filename": None
+            }
 
     async def generate_visual_from_marker(self, marker_text: str) -> dict:
         """Generate an image for a [VISUAL:] marker in a talk track."""
