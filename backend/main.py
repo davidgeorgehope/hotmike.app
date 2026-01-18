@@ -20,7 +20,7 @@ app = FastAPI(title="HotMike API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # Can't use credentials with wildcard origins
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -80,9 +80,15 @@ async def generate_name_card(request: NameCardRequest):
         raise HTTPException(status_code=503, detail="AI service not available")
 
     ai_service = get_ai_service()
-    ai_service.initialize()
+    try:
+        ai_service.initialize()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to initialize AI service: {e}")
 
-    result = await ai_service.generate_name_card_image(request.name, request.title)
+    try:
+        result = await ai_service.generate_name_card_image(request.name, request.title)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
     if result.get("error"):
         raise HTTPException(status_code=500, detail=result["error"])

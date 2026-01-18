@@ -17,9 +17,7 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, user_id: int, session_id: str) -> None:
-        """Accept a new WebSocket connection."""
-        await websocket.accept()
-
+        """Register a WebSocket connection (already accepted)."""
         async with self._lock:
             if user_id not in self.active_connections:
                 self.active_connections[user_id] = set()

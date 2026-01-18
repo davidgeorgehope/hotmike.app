@@ -39,6 +39,9 @@ async def transcription_websocket(
 ):
     """WebSocket endpoint for real-time transcription and AI suggestions."""
 
+    # Must accept WebSocket before doing anything else
+    await websocket.accept()
+
     # Verify token
     user = verify_token(token)
     if not user:
