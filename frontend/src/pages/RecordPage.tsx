@@ -2,10 +2,17 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useRecording } from '../contexts/RecordingContext';
+import { useAI } from '../contexts/AIContext';
 import { useMediaDevices } from '../hooks/useMediaDevices';
 import { useMediaRecorder } from '../hooks/useMediaRecorder';
-import { Compositor, LayoutMode } from '../lib/compositor';
+import { useVoiceCommands } from '../hooks/useVoiceCommands';
+import { Compositor, LayoutMode, PIPShape } from '../lib/compositor';
 import { recordingsApi } from '../lib/api';
+import { VUMeter } from '../components/VUMeter';
+import { ManualOverlayManager } from '../components/ManualOverlayManager';
+import { TranscriptDisplay } from '../components/TranscriptDisplay';
+import { SuggestionTray } from '../components/SuggestionTray';
+import { TalkTrackInput } from '../components/TalkTrackInput';
 
 type Mode = 'setup' | 'recording' | 'preview';
 
@@ -18,20 +25,37 @@ export function RecordPage() {
     nameCardTitle, setNameCardTitle,
     pipPosition, setPipPosition,
     pipSize, setPipSize,
+    pipShape, setPipShape,
   } = useRecording();
 
   const { webcamStream, screenStream, requestWebcam, requestScreen, stopAll, error: mediaError } = useMediaDevices();
   const { duration, recordedBlob, startRecording, stopRecording, clearRecording } = useMediaRecorder();
+  const {
+    isAIAvailable,
+    suggestions,
+    getCurrentSuggestion,
+    addSuggestion,
+    acceptSuggestion,
+    dismissSuggestion,
+    nextSuggestion,
+    startSession,
+    endSession,
+  } = useAI();
 
   const [mode, setMode] = useState<Mode>('setup');
   const [title, setTitle] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [showOverlayManager, setShowOverlayManager] = useState(false);
+  const [showTalkTrackInput, setShowTalkTrackInput] = useState(false);
+  const [hasOverlay, setHasOverlay] = useState(false);
+  const [voiceCommandsEnabled, setVoiceCommandsEnabled] = useState(true);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const displayVideoRef = useRef<HTMLVideoElement>(null);
   const compositorRef = useRef<Compositor | null>(null);
 
   useEffect(() => {
@@ -48,9 +72,9 @@ export function RecordPage() {
 
   useEffect(() => {
     if (compositorRef.current) {
-      compositorRef.current.setOptions({ nameCardText, nameCardTitle, pipPosition, pipSize });
+      compositorRef.current.setOptions({ nameCardText, nameCardTitle, pipPosition, pipSize, pipShape });
     }
-  }, [nameCardText, nameCardTitle, pipPosition, pipSize]);
+  }, [nameCardText, nameCardTitle, pipPosition, pipSize, pipShape]);
 
   useEffect(() => {
     if (webcamVideoRef.current && webcamStream) {
@@ -74,12 +98,59 @@ export function RecordPage() {
     }
   }, [screenStream]);
 
+  // Switch to preview mode when recording finishes
   useEffect(() => {
-    if (recordedBlob && previewVideoRef.current) {
-      previewVideoRef.current.src = URL.createObjectURL(recordedBlob);
+    if (recordedBlob) {
       setMode('preview');
     }
   }, [recordedBlob]);
+
+  // Set up preview video after switching to preview mode
+  useEffect(() => {
+    if (mode === 'preview' && recordedBlob && previewVideoRef.current) {
+      previewVideoRef.current.src = URL.createObjectURL(recordedBlob);
+    }
+  }, [mode, recordedBlob]);
+
+  // Handle inserting current suggestion
+  const handleInsertSuggestion = useCallback(async () => {
+    const suggestion = getCurrentSuggestion();
+    if (!suggestion || !compositorRef.current) return;
+
+    if (suggestion.imageUrl) {
+      try {
+        await compositorRef.current.setOverlayImage(suggestion.imageUrl);
+        setHasOverlay(true);
+        acceptSuggestion(suggestion.id);
+      } catch (err) {
+        console.error('Failed to load overlay:', err);
+      }
+    }
+  }, [getCurrentSuggestion, acceptSuggestion]);
+
+  // Handle clearing overlay
+  const handleClearOverlay = useCallback(() => {
+    if (compositorRef.current) {
+      compositorRef.current.clearOverlay();
+      setHasOverlay(false);
+    }
+  }, []);
+
+  // Handle dismissing current suggestion
+  const handleDismissSuggestion = useCallback(() => {
+    const suggestion = getCurrentSuggestion();
+    if (suggestion) {
+      dismissSuggestion(suggestion.id);
+    }
+  }, [getCurrentSuggestion, dismissSuggestion]);
+
+  // Voice commands integration
+  useVoiceCommands(mode === 'recording' && voiceCommandsEnabled && isAIAvailable, {
+    onShow: handleInsertSuggestion,
+    onNext: nextSuggestion,
+    onClear: handleClearOverlay,
+    onDismiss: handleDismissSuggestion,
+  });
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -96,6 +167,22 @@ export function RecordPage() {
         case '3':
           setLayout('screen_pip');
           break;
+        case '4':
+          handleInsertSuggestion();
+          break;
+        case '5':
+          handleClearOverlay();
+          break;
+        case 'Tab':
+          e.preventDefault();
+          nextSuggestion();
+          break;
+        case '`':
+          const suggestion = getCurrentSuggestion();
+          if (suggestion) {
+            dismissSuggestion(suggestion.id);
+          }
+          break;
         case 'Escape':
           handleStopRecording();
           break;
@@ -104,19 +191,32 @@ export function RecordPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [mode, setLayout]);
+  }, [mode, setLayout, handleInsertSuggestion, handleClearOverlay, nextSuggestion, dismissSuggestion, getCurrentSuggestion]);
 
   const handleStartRecording = useCallback(() => {
     if (!canvasRef.current) return;
     compositorRef.current?.start();
     startRecording(canvasRef.current, webcamStream, screenStream);
+    startSession();
     setMode('recording');
-  }, [webcamStream, screenStream, startRecording]);
+  }, [webcamStream, screenStream, startRecording, startSession]);
+
+  // Set up display video when recording starts
+  useEffect(() => {
+    if (mode === 'recording' && displayVideoRef.current && canvasRef.current) {
+      const canvasStream = canvasRef.current.captureStream(30);
+      displayVideoRef.current.srcObject = canvasStream;
+      displayVideoRef.current.play();
+    }
+  }, [mode]);
 
   const handleStopRecording = useCallback(() => {
     stopRecording();
     compositorRef.current?.stop();
-  }, [stopRecording]);
+    compositorRef.current?.clearOverlay();
+    setHasOverlay(false);
+    endSession();
+  }, [stopRecording, endSession]);
 
   const handleSave = async () => {
     if (!token || !recordedBlob) return;
@@ -151,6 +251,15 @@ export function RecordPage() {
     setTitle('');
   };
 
+  const handleSelectOverlay = (overlayUrl: string) => {
+    // Add the selected overlay to suggestions
+    addSuggestion({
+      text: 'Manual overlay',
+      imageUrl: overlayUrl,
+      source: 'manual',
+    });
+  };
+
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -180,6 +289,7 @@ export function RecordPage() {
       <div className="hidden">
         <video ref={webcamVideoRef} muted playsInline />
         <video ref={screenVideoRef} muted playsInline />
+        <canvas ref={canvasRef} width={1920} height={1080} />
       </div>
 
       <main className="p-6">
@@ -262,7 +372,7 @@ export function RecordPage() {
 
             <div className="space-y-4">
               <h3 className="text-lg font-medium">PIP Settings</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">Position</label>
                   <select
@@ -288,8 +398,66 @@ export function RecordPage() {
                     <option value="large">Large</option>
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">Shape</label>
+                  <select
+                    value={pipShape}
+                    onChange={(e) => setPipShape(e.target.value as PIPShape)}
+                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="circle">Circle</option>
+                    <option value="square">Square</option>
+                  </select>
+                </div>
               </div>
             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium">Overlays</h3>
+                <button
+                  onClick={() => setShowOverlayManager(true)}
+                  className="w-full px-4 py-3 rounded-lg border bg-gray-800 border-gray-700 hover:border-gray-600"
+                >
+                  Manage Overlay Images
+                </button>
+                {suggestions.length > 0 && (
+                  <p className="text-sm text-gray-400">
+                    {suggestions.length} overlay{suggestions.length > 1 ? 's' : ''} ready
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium">Talk Tracks</h3>
+                <button
+                  onClick={() => setShowTalkTrackInput(true)}
+                  className="w-full px-4 py-3 rounded-lg border bg-gray-800 border-gray-700 hover:border-gray-600"
+                >
+                  Manage Talk Tracks
+                </button>
+                {isAIAvailable && (
+                  <p className="text-sm text-gray-400">
+                    Prebake visuals from your script
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {isAIAvailable && (
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="voice-commands"
+                  checked={voiceCommandsEnabled}
+                  onChange={(e) => setVoiceCommandsEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded bg-gray-800 border-gray-700"
+                />
+                <label htmlFor="voice-commands" className="text-sm text-gray-400">
+                  Enable voice commands ("Hey Mike, show that")
+                </label>
+              </div>
+            )}
 
             <div className="pt-4">
               <button
@@ -311,22 +479,27 @@ export function RecordPage() {
                   <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
                   <span className="text-xl font-mono">{formatDuration(duration)}</span>
                 </div>
+                <VUMeter stream={webcamStream} />
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-400">
-                <span>Press 1/2/3 to switch layouts</span>
+                <span>1/2/3 layouts</span>
                 <span>|</span>
-                <span>Esc to stop</span>
+                <span>4 insert | 5 clear</span>
+                <span>|</span>
+                <span>Esc stop</span>
               </div>
             </div>
 
             <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-              <canvas
-                ref={canvasRef}
-                className="w-full h-full"
+              <video
+                ref={displayVideoRef}
+                muted
+                playsInline
+                className="w-full h-full object-cover"
               />
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="grid grid-cols-3 gap-4">
               <div className="flex gap-2">
                 {(['face_card', 'face_only', 'screen_pip'] as LayoutMode[]).map((l, i) => (
                   <button
@@ -342,14 +515,36 @@ export function RecordPage() {
                   </button>
                 ))}
               </div>
-              <button
-                onClick={handleStopRecording}
-                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium"
-              >
-                Stop Recording
-              </button>
+              <div className="flex justify-center">
+                <button
+                  onClick={() => setShowOverlayManager(true)}
+                  className="px-3 py-1 rounded text-sm bg-gray-800 hover:bg-gray-700"
+                >
+                  + Overlay
+                </button>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={handleStopRecording}
+                  className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium"
+                >
+                  Stop Recording
+                </button>
+              </div>
             </div>
+
+            {isAIAvailable && (
+              <TranscriptDisplay className="mt-4" maxHeight="120px" />
+            )}
           </div>
+        )}
+
+        {mode === 'recording' && (
+          <SuggestionTray
+            onInsert={handleInsertSuggestion}
+            onClear={handleClearOverlay}
+            hasOverlay={hasOverlay}
+          />
         )}
 
         {mode === 'preview' && recordedBlob && (
@@ -405,6 +600,17 @@ export function RecordPage() {
           </div>
         )}
       </main>
+
+      <ManualOverlayManager
+        isOpen={showOverlayManager}
+        onClose={() => setShowOverlayManager(false)}
+        onSelectOverlay={handleSelectOverlay}
+      />
+
+      <TalkTrackInput
+        isOpen={showTalkTrackInput}
+        onClose={() => setShowTalkTrackInput(false)}
+      />
     </div>
   );
 }

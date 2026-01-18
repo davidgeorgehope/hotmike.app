@@ -55,6 +55,7 @@ export interface Preferences {
   name_card_title: string;
   pip_position: string;
   pip_size: string;
+  pip_shape: string;
 }
 
 export const authApi = {
@@ -114,4 +115,102 @@ export const preferencesApi = {
 
   update: (token: string, prefs: Partial<Preferences>) =>
     api<Preferences>('/preferences', { method: 'PUT', token, body: prefs }),
+};
+
+export interface Overlay {
+  id: number;
+  filename: string;
+  original_name: string;
+  mime_type: string;
+  file_size: number;
+  created_at: string;
+}
+
+export interface AIStatus {
+  available: boolean;
+  enabled: boolean;
+  configured: boolean;
+  rate_limits: {
+    calls_per_minute: number;
+    calls_per_session: number;
+  };
+}
+
+export const overlaysApi = {
+  list: (token: string) =>
+    api<Overlay[]>('/overlays', { token }),
+
+  upload: async (token: string, file: File): Promise<Overlay> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/overlays/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
+      throw new Error(error.detail || 'Upload failed');
+    }
+
+    return response.json();
+  },
+
+  getImageUrl: (overlayId: number) => `${API_BASE}/overlays/${overlayId}/image`,
+
+  delete: (token: string, id: number) =>
+    api<{ message: string }>(`/overlays/${id}`, { method: 'DELETE', token }),
+};
+
+export const aiApi = {
+  getStatus: () =>
+    api<AIStatus>('/ai-status'),
+};
+
+export interface TalkTrack {
+  id: number;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  marker_count?: number;
+  prebaked_status?: Record<string, number>;
+}
+
+export interface PrebakedVisual {
+  id: number;
+  marker_text: string;
+  marker_index: number;
+  image_filename: string | null;
+  status: string;
+  error_message: string | null;
+  generated_at: string | null;
+}
+
+export interface TalkTrackDetail extends TalkTrack {
+  prebaked_visuals: PrebakedVisual[];
+}
+
+export const talkTracksApi = {
+  list: (token: string) =>
+    api<TalkTrack[]>('/talk-tracks', { token }),
+
+  get: (token: string, id: number) =>
+    api<TalkTrackDetail>(`/talk-tracks/${id}`, { token }),
+
+  create: (token: string, title: string, content: string) =>
+    api<{ id: number; title: string; content: string; markers: { text: string; index: number }[]; prebaking_started: boolean }>(
+      '/talk-tracks',
+      { method: 'POST', token, body: { title, content } }
+    ),
+
+  update: (token: string, id: number, data: { title?: string; content?: string }) =>
+    api<{ message: string }>(`/talk-tracks/${id}`, { method: 'PUT', token, body: data }),
+
+  delete: (token: string, id: number) =>
+    api<{ message: string }>(`/talk-tracks/${id}`, { method: 'DELETE', token }),
 };

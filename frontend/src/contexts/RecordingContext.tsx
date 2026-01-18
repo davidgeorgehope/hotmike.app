@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { preferencesApi, Preferences } from '../lib/api';
-import { LayoutMode, PIPPosition, PIPSize } from '../lib/compositor';
+import { LayoutMode, PIPPosition, PIPSize, PIPShape } from '../lib/compositor';
 
 interface RecordingContextType {
   layout: LayoutMode;
@@ -14,6 +14,8 @@ interface RecordingContextType {
   setPipPosition: (pos: PIPPosition) => void;
   pipSize: PIPSize;
   setPipSize: (size: PIPSize) => void;
+  pipShape: PIPShape;
+  setPipShape: (shape: PIPShape) => void;
   isPreferencesLoaded: boolean;
 }
 
@@ -26,6 +28,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
   const [nameCardTitle, setNameCardTitleState] = useState('');
   const [pipPosition, setPipPositionState] = useState<PIPPosition>('bottom-right');
   const [pipSize, setPipSizeState] = useState<PIPSize>('medium');
+  const [pipShape, setPipShapeState] = useState<PIPShape>('circle');
   const [isPreferencesLoaded, setIsPreferencesLoaded] = useState(false);
 
   const saveTimeoutRef = useRef<number | null>(null);
@@ -38,6 +41,7 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
           setNameCardTitleState(prefs.name_card_title);
           setPipPositionState(prefs.pip_position as PIPPosition);
           setPipSizeState(prefs.pip_size as PIPSize);
+          setPipShapeState((prefs.pip_shape as PIPShape) || 'circle');
           setIsPreferencesLoaded(true);
         })
         .catch(() => {
@@ -78,6 +82,11 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
     savePreferences({ pip_size: size });
   }, [savePreferences]);
 
+  const setPipShape = useCallback((shape: PIPShape) => {
+    setPipShapeState(shape);
+    savePreferences({ pip_shape: shape });
+  }, [savePreferences]);
+
   return (
     <RecordingContext.Provider value={{
       layout,
@@ -90,6 +99,8 @@ export function RecordingProvider({ children }: { children: ReactNode }) {
       setPipPosition,
       pipSize,
       setPipSize,
+      pipShape,
+      setPipShape,
       isPreferencesLoaded,
     }}>
       {children}

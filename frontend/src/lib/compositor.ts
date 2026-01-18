@@ -1,14 +1,17 @@
 export type LayoutMode = 'face_card' | 'face_only' | 'screen_pip';
 export type PIPPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type PIPSize = 'small' | 'medium' | 'large';
+export type PIPShape = 'circle' | 'square';
+export type OverlayPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 const CANVAS_WIDTH = 1920;
 const CANVAS_HEIGHT = 1080;
 
-const PIP_SIZES: Record<PIPSize, { width: number; height: number }> = {
-  small: { width: 320, height: 180 },
-  medium: { width: 480, height: 270 },
-  large: { width: 640, height: 360 },
+// Circle PIP diameters
+const PIP_SIZES: Record<PIPSize, number> = {
+  small: 200,
+  medium: 280,
+  large: 360,
 };
 
 const PIP_MARGIN = 32;
@@ -18,6 +21,13 @@ export interface CompositorOptions {
   nameCardTitle: string;
   pipPosition: PIPPosition;
   pipSize: PIPSize;
+  pipShape: PIPShape;
+}
+
+export interface OverlayOptions {
+  opacity: number;  // 0-1
+  position: OverlayPosition;
+  scale: number;  // 0.1-1
 }
 
 export class Compositor {
@@ -31,6 +41,13 @@ export class Compositor {
     nameCardTitle: '',
     pipPosition: 'bottom-right',
     pipSize: 'medium',
+    pipShape: 'circle',
+  };
+  private overlayImage: HTMLImageElement | null = null;
+  private overlayOptions: OverlayOptions = {
+    opacity: 1,
+    position: 'center',
+    scale: 0.5,
   };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -55,6 +72,38 @@ export class Compositor {
 
   setOptions(options: Partial<CompositorOptions>) {
     this.options = { ...this.options, ...options };
+  }
+
+  async setOverlayImage(imageUrl: string | null): Promise<void> {
+    if (!imageUrl) {
+      this.overlayImage = null;
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        this.overlayImage = img;
+        resolve();
+      };
+      img.onerror = () => {
+        reject(new Error('Failed to load overlay image'));
+      };
+      img.src = imageUrl;
+    });
+  }
+
+  clearOverlay(): void {
+    this.overlayImage = null;
+  }
+
+  setOverlayOptions(options: Partial<OverlayOptions>): void {
+    this.overlayOptions = { ...this.overlayOptions, ...options };
+  }
+
+  getOverlayImage(): HTMLImageElement | null {
+    return this.overlayImage;
   }
 
   start() {
@@ -91,6 +140,9 @@ export class Compositor {
         this.drawWebcamPIP();
         break;
     }
+
+    // Draw overlay on top of everything
+    this.drawOverlay();
   }
 
   private drawVideoFullFrame(video: HTMLVideoElement | null) {
@@ -123,49 +175,54 @@ export class Compositor {
   private drawWebcamPIP() {
     if (!this.webcamVideo || this.webcamVideo.readyState < 2) return;
 
-    const { width, height } = PIP_SIZES[this.options.pipSize];
-    const pos = this.getPIPPosition(width, height);
+    const size = PIP_SIZES[this.options.pipSize];
+    const pos = this.getPIPPosition(size);
+    const isCircle = this.options.pipShape === 'circle';
 
     this.ctx.save();
     this.ctx.beginPath();
-    this.roundRect(pos.x, pos.y, width, height, 12);
+
+    if (isCircle) {
+      const radius = size / 2;
+      this.ctx.arc(pos.x + radius, pos.y + radius, radius, 0, Math.PI * 2);
+    } else {
+      this.roundRect(pos.x, pos.y, size, size, 16);
+    }
     this.ctx.clip();
 
-    const videoAspect = this.webcamVideo.videoWidth / this.webcamVideo.videoHeight;
-    const pipAspect = width / height;
+    // Crop video to square (1:1 aspect ratio) from center
+    const videoSize = Math.min(this.webcamVideo.videoWidth, this.webcamVideo.videoHeight);
+    const sx = (this.webcamVideo.videoWidth - videoSize) / 2;
+    const sy = (this.webcamVideo.videoHeight - videoSize) / 2;
 
-    let sx = 0, sy = 0, sw = this.webcamVideo.videoWidth, sh = this.webcamVideo.videoHeight;
-
-    if (videoAspect > pipAspect) {
-      sw = this.webcamVideo.videoHeight * pipAspect;
-      sx = (this.webcamVideo.videoWidth - sw) / 2;
-    } else {
-      sh = this.webcamVideo.videoWidth / pipAspect;
-      sy = (this.webcamVideo.videoHeight - sh) / 2;
-    }
-
-    this.ctx.drawImage(this.webcamVideo, sx, sy, sw, sh, pos.x, pos.y, width, height);
+    this.ctx.drawImage(this.webcamVideo, sx, sy, videoSize, videoSize, pos.x, pos.y, size, size);
 
     this.ctx.restore();
 
+    // Draw border
     this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-    this.ctx.lineWidth = 2;
+    this.ctx.lineWidth = 3;
     this.ctx.beginPath();
-    this.roundRect(pos.x, pos.y, width, height, 12);
+    if (isCircle) {
+      const radius = size / 2;
+      this.ctx.arc(pos.x + radius, pos.y + radius, radius, 0, Math.PI * 2);
+    } else {
+      this.roundRect(pos.x, pos.y, size, size, 16);
+    }
     this.ctx.stroke();
   }
 
-  private getPIPPosition(width: number, height: number): { x: number; y: number } {
+  private getPIPPosition(diameter: number): { x: number; y: number } {
     switch (this.options.pipPosition) {
       case 'top-left':
         return { x: PIP_MARGIN, y: PIP_MARGIN };
       case 'top-right':
-        return { x: CANVAS_WIDTH - width - PIP_MARGIN, y: PIP_MARGIN };
+        return { x: CANVAS_WIDTH - diameter - PIP_MARGIN, y: PIP_MARGIN };
       case 'bottom-left':
-        return { x: PIP_MARGIN, y: CANVAS_HEIGHT - height - PIP_MARGIN };
+        return { x: PIP_MARGIN, y: CANVAS_HEIGHT - diameter - PIP_MARGIN };
       case 'bottom-right':
       default:
-        return { x: CANVAS_WIDTH - width - PIP_MARGIN, y: CANVAS_HEIGHT - height - PIP_MARGIN };
+        return { x: CANVAS_WIDTH - diameter - PIP_MARGIN, y: CANVAS_HEIGHT - diameter - PIP_MARGIN };
     }
   }
 
@@ -227,5 +284,46 @@ export class Compositor {
     this.ctx.lineTo(x, y + r);
     this.ctx.quadraticCurveTo(x, y, x + r, y);
     this.ctx.closePath();
+  }
+
+  private drawOverlay(): void {
+    if (!this.overlayImage) return;
+
+    const { opacity, position, scale } = this.overlayOptions;
+    const imgWidth = this.overlayImage.width * scale;
+    const imgHeight = this.overlayImage.height * scale;
+
+    // Calculate position
+    let x: number, y: number;
+    const margin = 32;
+
+    switch (position) {
+      case 'top-left':
+        x = margin;
+        y = margin;
+        break;
+      case 'top-right':
+        x = CANVAS_WIDTH - imgWidth - margin;
+        y = margin;
+        break;
+      case 'bottom-left':
+        x = margin;
+        y = CANVAS_HEIGHT - imgHeight - margin;
+        break;
+      case 'bottom-right':
+        x = CANVAS_WIDTH - imgWidth - margin;
+        y = CANVAS_HEIGHT - imgHeight - margin;
+        break;
+      case 'center':
+      default:
+        x = (CANVAS_WIDTH - imgWidth) / 2;
+        y = (CANVAS_HEIGHT - imgHeight) / 2;
+        break;
+    }
+
+    this.ctx.save();
+    this.ctx.globalAlpha = opacity;
+    this.ctx.drawImage(this.overlayImage, x, y, imgWidth, imgHeight);
+    this.ctx.restore();
   }
 }
