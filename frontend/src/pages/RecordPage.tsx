@@ -9,7 +9,6 @@ import { useVoiceCommands } from '../hooks/useVoiceCommands';
 import { useTranscriptionWebSocket } from '../hooks/useTranscriptionWebSocket';
 import { Compositor, LayoutMode, PIPShape } from '../lib/compositor';
 import { recordingsApi } from '../lib/api';
-import { generateNameCardImage } from '../lib/nameCardGenerator';
 import { VUMeter } from '../components/VUMeter';
 import { ManualOverlayManager } from '../components/ManualOverlayManager';
 import { TranscriptDisplay } from '../components/TranscriptDisplay';
@@ -252,37 +251,24 @@ export function RecordPage() {
 
     // Pre-generate name card if name is set (before recording starts)
     let nameCardImageUrl: string | null = null;
-    if (nameCardText) {
-      if (isAIAvailable) {
-        try {
-          const response = await fetch('/api/generate-name-card', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: nameCardText,
-              title: nameCardTitle || undefined,
-            }),
-          });
-          if (response.ok) {
-            const data = await response.json();
-            if (data.image_url) {
-              nameCardImageUrl = data.image_url;
-            }
-          }
-        } catch (err) {
-          // Fallback to canvas generator if AI fails
-          nameCardImageUrl = generateNameCardImage({
+    if (nameCardText && isAIAvailable) {
+      try {
+        const response = await fetch('/api/generate-name-card', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             name: nameCardText,
             title: nameCardTitle || undefined,
-          });
-        }
-      }
-      // Fallback if AI unavailable or didn't produce image
-      if (!nameCardImageUrl) {
-        nameCardImageUrl = generateNameCardImage({
-          name: nameCardText,
-          title: nameCardTitle || undefined,
+          }),
         });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.image_url) {
+            nameCardImageUrl = data.image_url;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to generate name card:', err);
       }
     }
 

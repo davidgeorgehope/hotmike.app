@@ -13,6 +13,10 @@ from config import get_settings, is_ai_available
 # Directory for generated images
 GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 
+# Model IDs
+IMAGE_MODEL = "gemini-3-pro-image-preview"
+LLM_MODEL = "gemini-3-flash-preview"
+
 
 class AIService:
     _instance: Optional['AIService'] = None
@@ -54,7 +58,7 @@ class AIService:
 
         try:
             response = await self._client.aio.models.generate_content(
-                model='gemini-2.0-flash',
+                model=LLM_MODEL,
                 contents=[
                     types.Part.from_bytes(
                         data=audio_bytes,
@@ -97,7 +101,7 @@ Respond in this exact JSON format:
 Only suggest a visual if it would genuinely add value. Return should_suggest: false if the content doesn't warrant a visual."""
 
             response = await self._client.aio.models.generate_content(
-                model='gemini-2.0-flash',
+                model=LLM_MODEL,
                 contents=prompt
             )
             text = response.text.strip() if response.text else ""
@@ -150,7 +154,7 @@ Respond in this exact JSON format:
 Only include genuinely useful moments. Return empty moments array if none found."""
 
             response = await self._client.aio.models.generate_content(
-                model='gemini-2.0-flash',
+                model=LLM_MODEL,
                 contents=prompt
             )
             text = response.text.strip() if response.text else ""
@@ -171,26 +175,34 @@ Only include genuinely useful moments. Return empty moments array if none found.
             return []
 
     async def generate_image(self, prompt: str, aspect_ratio: str = "16:9") -> dict:
-        """Generate an image using Imagen 3."""
+        """Generate an image using Gemini 3 Pro Image."""
         if not self.is_ready:
             return {"error": "AI service not available", "image_url": None, "filename": None}
 
         try:
-            response = await self._client.aio.models.generate_images(
-                model='imagen-3.0-generate-002',
-                prompt=prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    aspect_ratio=aspect_ratio,
+            response = await self._client.aio.models.generate_content(
+                model=IMAGE_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"]
                 )
             )
 
-            if not response.generated_images:
-                return {"error": "No image generated", "image_url": None, "filename": None}
+            # Extract image from response
+            image_bytes = None
+            if hasattr(response, 'candidates'):
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'inline_data') and part.inline_data:
+                                if hasattr(part.inline_data, 'data') and part.inline_data.data:
+                                    image_bytes = part.inline_data.data
+                                    break
+                    if image_bytes:
+                        break
 
-            # Get the image data
-            image = response.generated_images[0]
-            image_bytes = image.image.image_bytes
+            if not image_bytes:
+                return {"error": "No image generated", "image_url": None, "filename": None}
 
             # Save to file
             filename = f"{uuid.uuid4()}.png"
@@ -246,7 +258,7 @@ Respond ONLY with valid JSON, no other text:
 {{"position": "bottom-right", "scale": 0.4}}"""
 
             response = await self._client.aio.models.generate_content(
-                model='gemini-2.0-flash',
+                model=LLM_MODEL,
                 contents=positioning_prompt
             )
             text = response.text.strip() if response.text else ""
