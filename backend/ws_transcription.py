@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from jose import jwt, JWTError
@@ -8,6 +9,8 @@ from websocket_manager import get_connection_manager
 from ai_service import get_ai_service
 from rate_limiter import get_rate_limiter
 from config import is_ai_available
+
+logger = logging.getLogger(__name__)
 
 # JWT settings (should match user_auth.py)
 SECRET_KEY = "your-secret-key-change-in-production"
@@ -46,17 +49,24 @@ async def transcription_websocket(
     ai_service = get_ai_service()
     rate_limiter = get_rate_limiter()
 
-    # Initialize AI service if available
+    # Initialize AI service if available (with error handling)
+    ai_initialized = False
     if is_ai_available():
-        ai_service.initialize()
+        try:
+            ai_service.initialize()
+            ai_initialized = ai_service.is_ready
+        except Exception as e:
+            logger.error(f"Failed to initialize AI service: {e}")
+            # Continue without AI - transcription won't work but connection stays open
 
     await manager.connect(websocket, user["id"], session_id)
 
-    # Send connected message
+    # Send connected message with AI status
     await manager.send_personal_message({
         "type": "connected",
         "session_id": session_id,
-        "ai_available": ai_service.is_ready,
+        "ai_available": ai_initialized,
+        "message": "Ready" if ai_initialized else "AI unavailable"
     }, websocket)
 
     try:
@@ -257,6 +267,13 @@ async def transcription_websocket(
                 }, websocket)
 
     except WebSocketDisconnect:
+        # Normal disconnect
         pass
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+            await websocket.close(code=1011, reason="Internal error")
+        except Exception:
+            pass  # Connection may already be closed
     finally:
         await manager.disconnect(websocket)

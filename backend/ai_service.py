@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import uuid
 from typing import Optional
@@ -208,6 +209,81 @@ Only include genuinely useful moments. Return empty moments array if none found.
                 "error": str(e),
                 "image_url": None,
                 "filename": None
+            }
+
+    async def generate_image_with_positioning(self, prompt: str, context: str = "", aspect_ratio: str = "16:9") -> dict:
+        """Generate an image and get LLM-suggested positioning for it."""
+        if not self.is_ready:
+            return {"error": "AI service not available", "image_url": None, "filename": None, "position": "bottom-right", "scale": 0.4}
+
+        # First generate the image
+        image_result = await self.generate_image(prompt, aspect_ratio)
+        if image_result.get("error"):
+            return {
+                **image_result,
+                "position": "bottom-right",
+                "scale": 0.4
+            }
+
+        # Ask LLM for positioning suggestion
+        try:
+            positioning_prompt = f"""An overlay image was generated for a video recording.
+
+Image prompt: "{prompt}"
+{f'Context: {context}' if context else ''}
+
+Where should this overlay appear on the video recording to be most effective without blocking the speaker?
+Options: center, center-left, center-right, top-left, top-right, bottom-left, bottom-right
+
+What scale should it be? (0.3 = small, 0.5 = medium, 0.7 = large)
+
+Consider:
+- Informational graphics work well in corners (bottom-right is common for lower-thirds)
+- Full-frame illustrations may need center positioning
+- Don't block the speaker's face (usually center/left of frame)
+
+Respond ONLY with valid JSON, no other text:
+{{"position": "bottom-right", "scale": 0.4}}"""
+
+            response = await self._client.aio.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=positioning_prompt
+            )
+            text = response.text.strip() if response.text else ""
+
+            # Remove markdown code blocks if present
+            if text.startswith('```'):
+                text = text.split('\n', 1)[1]
+                if text.endswith('```'):
+                    text = text[:-3]
+                text = text.strip()
+            if text.startswith('json'):
+                text = text[4:].strip()
+
+            positioning = json.loads(text)
+
+            # Validate position
+            valid_positions = ['center', 'center-left', 'center-right', 'top-left', 'top-right', 'bottom-left', 'bottom-right']
+            position = positioning.get("position", "bottom-right")
+            if position not in valid_positions:
+                position = "bottom-right"
+
+            # Validate scale
+            scale = positioning.get("scale", 0.4)
+            if not isinstance(scale, (int, float)) or scale < 0.1 or scale > 1.0:
+                scale = 0.4
+
+            return {
+                **image_result,
+                "position": position,
+                "scale": scale
+            }
+        except Exception:
+            # Default positioning if LLM fails
+            return {
+                **image_result,
+                "position": "bottom-right",
+                "scale": 0.4
             }
 
     async def generate_name_card_image(self, name: str, title: Optional[str] = None) -> dict:

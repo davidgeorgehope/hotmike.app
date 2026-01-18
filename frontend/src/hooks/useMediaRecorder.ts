@@ -21,6 +21,7 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
   });
 
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -30,7 +31,7 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
     canvas: HTMLCanvasElement,
     webcamStream: MediaStream | null,
     screenStream: MediaStream | null
-  ): MediaStream => {
+  ): { combinedStream: MediaStream; audioStream: MediaStream | null } => {
     const canvasStream = canvas.captureStream(30);
     const videoTracks = canvasStream.getVideoTracks();
 
@@ -55,10 +56,15 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
       }
     }
 
-    return new MediaStream([
-      ...videoTracks,
-      ...dest.stream.getAudioTracks(),
-    ]);
+    const audioStream = dest.stream.getAudioTracks().length > 0 ? dest.stream : null;
+
+    return {
+      combinedStream: new MediaStream([
+        ...videoTracks,
+        ...dest.stream.getAudioTracks(),
+      ]),
+      audioStream,
+    };
   }, []);
 
   const startRecording = useCallback((
@@ -68,7 +74,7 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
   ) => {
     chunksRef.current = [];
 
-    const combinedStream = createCombinedStream(canvas, webcamStream, screenStream);
+    const { combinedStream, audioStream } = createCombinedStream(canvas, webcamStream, screenStream);
 
     const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
       ? 'video/webm;codecs=vp9'
@@ -82,12 +88,29 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
         chunksRef.current.push(e.data);
-        // Stream chunk for real-time transcription
-        if (options.onDataAvailable) {
-          options.onDataAvailable(e.data);
-        }
       }
     };
+
+    // Create audio-only recorder for transcription
+    if (options.onDataAvailable && audioStream) {
+      const audioMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+      const audioRecorder = new MediaRecorder(audioStream, {
+        mimeType: audioMimeType,
+        audioBitsPerSecond: 128000,
+      });
+
+      audioRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          options.onDataAvailable!(e.data);
+        }
+      };
+
+      audioRecorderRef.current = audioRecorder;
+      audioRecorder.start(5000); // Send audio chunks every 5 seconds
+    }
 
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: mimeType });
@@ -133,6 +156,11 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop();
+    }
+
+    if (audioRecorderRef.current && audioRecorderRef.current.state !== 'inactive') {
+      audioRecorderRef.current.stop();
+      audioRecorderRef.current = null;
     }
 
     if (timerRef.current) {

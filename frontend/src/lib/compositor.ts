@@ -2,7 +2,7 @@ export type LayoutMode = 'face_card' | 'face_only' | 'screen_pip';
 export type PIPPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type PIPSize = 'small' | 'medium' | 'large';
 export type PIPShape = 'circle' | 'square';
-export type OverlayPosition = 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+export type OverlayPosition = 'center' | 'center-left' | 'center-right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 const CANVAS_WIDTH = 1920;
 const CANVAS_HEIGHT = 1080;
@@ -46,8 +46,8 @@ export class Compositor {
   private overlayImage: HTMLImageElement | null = null;
   private overlayOptions: OverlayOptions = {
     opacity: 1,
-    position: 'center',
-    scale: 0.5,
+    position: 'bottom-right',
+    scale: 0.4,
   };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -313,6 +313,14 @@ export class Compositor {
       case 'bottom-right':
         x = CANVAS_WIDTH - imgWidth - margin;
         y = CANVAS_HEIGHT - imgHeight - margin;
+        break;
+      case 'center-left':
+        x = margin;
+        y = (CANVAS_HEIGHT - imgHeight) / 2;
+        break;
+      case 'center-right':
+        x = CANVAS_WIDTH - imgWidth - margin;
+        y = (CANVAS_HEIGHT - imgHeight) / 2;
         break;
       case 'center':
       default:

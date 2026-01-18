@@ -96,23 +96,30 @@ async def generate_name_card(request: NameCardRequest):
 class ImageGenerationRequest(BaseModel):
     prompt: str
     aspect_ratio: Optional[str] = "16:9"
+    context: Optional[str] = None
 
 
 @app.post("/api/generate-image")
 async def generate_image(request: ImageGenerationRequest):
-    """Generate an image from a text prompt using AI."""
+    """Generate an image from a text prompt using AI, with smart positioning."""
     if not is_ai_available():
         raise HTTPException(status_code=503, detail="AI service not available")
 
     ai_service = get_ai_service()
     ai_service.initialize()
 
-    result = await ai_service.generate_image(request.prompt, request.aspect_ratio)
+    result = await ai_service.generate_image_with_positioning(
+        prompt=request.prompt,
+        context=request.context or "",
+        aspect_ratio=request.aspect_ratio
+    )
 
     if result.get("error"):
         raise HTTPException(status_code=500, detail=result["error"])
 
     return {
         "image_url": result["image_url"],
-        "filename": result["filename"]
+        "filename": result["filename"],
+        "position": result.get("position", "bottom-right"),
+        "scale": result.get("scale", 0.4)
     }

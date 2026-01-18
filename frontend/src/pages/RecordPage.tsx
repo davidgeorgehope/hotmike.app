@@ -47,7 +47,7 @@ export function RecordPage() {
   const [mode, setMode] = useState<Mode>('setup');
 
   // WebSocket for real-time transcription
-  const { sendAudioChunk } = useTranscriptionWebSocket({
+  const { sendAudioChunk, isConnected: wsConnected } = useTranscriptionWebSocket({
     enabled: mode === 'recording' && isAIAvailable,
     sessionId,
   });
@@ -62,6 +62,8 @@ export function RecordPage() {
   const [showTalkTrackInput, setShowTalkTrackInput] = useState(false);
   const [hasOverlay, setHasOverlay] = useState(false);
   const [voiceCommandsEnabled, setVoiceCommandsEnabled] = useState(true);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [isStartingRecording, setIsStartingRecording] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
@@ -127,9 +129,19 @@ export function RecordPage() {
   // Handle inserting current suggestion
   const handleInsertSuggestion = useCallback(async () => {
     const suggestion = getCurrentSuggestion();
-    if (!suggestion || !compositorRef.current) return;
+    if (!suggestion || !compositorRef.current || isGeneratingImage) return;
+
+    // Apply positioning if available on the suggestion
+    if (suggestion.overlayPosition || suggestion.overlayScale) {
+      compositorRef.current.setOverlayOptions({
+        position: suggestion.overlayPosition || 'bottom-right',
+        scale: suggestion.overlayScale || 0.4,
+        opacity: 1,
+      });
+    }
 
     if (suggestion.imageUrl) {
+      // Image exists - insert immediately
       try {
         await compositorRef.current.setOverlayImage(suggestion.imageUrl);
         setHasOverlay(true);
@@ -137,8 +149,36 @@ export function RecordPage() {
       } catch (err) {
         console.error('Failed to load overlay:', err);
       }
+    } else if (suggestion.searchQuery) {
+      // No image yet - generate one first
+      setIsGeneratingImage(true);
+      try {
+        const response = await fetch('/api/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: suggestion.searchQuery }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.image_url && compositorRef.current) {
+            // Apply returned positioning from API
+            compositorRef.current.setOverlayOptions({
+              position: data.position || 'bottom-right',
+              scale: data.scale || 0.4,
+              opacity: 1,
+            });
+            await compositorRef.current.setOverlayImage(data.image_url);
+            setHasOverlay(true);
+            acceptSuggestion(suggestion.id);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to generate image:', err);
+      } finally {
+        setIsGeneratingImage(false);
+      }
     }
-  }, [getCurrentSuggestion, acceptSuggestion]);
+  }, [getCurrentSuggestion, acceptSuggestion, isGeneratingImage]);
 
   // Handle clearing overlay
   const handleClearOverlay = useCallback(() => {
@@ -206,20 +246,13 @@ export function RecordPage() {
   }, [mode, setLayout, handleInsertSuggestion, handleClearOverlay, nextSuggestion, dismissSuggestion, getCurrentSuggestion]);
 
   const handleStartRecording = useCallback(async () => {
-    if (!canvasRef.current) return;
-    compositorRef.current?.start();
-    startRecording(canvasRef.current, webcamStream, screenStream);
-    startSession();
+    if (!canvasRef.current || isStartingRecording) return;
 
-    // Auto-suggest name card overlay if name is set
+    setIsStartingRecording(true);
+
+    // Pre-generate name card if name is set (before recording starts)
+    let nameCardImageUrl: string | null = null;
     if (nameCardText) {
-      // Add text-only suggestion immediately
-      addSuggestion({
-        text: `Name card: ${nameCardText}`,
-        source: 'prebaked',
-      });
-
-      // Try to generate AI name card in background
       if (isAIAvailable) {
         try {
           const response = await fetch('/api/generate-name-card', {
@@ -233,42 +266,43 @@ export function RecordPage() {
           if (response.ok) {
             const data = await response.json();
             if (data.image_url) {
-              // Update suggestion with generated image
-              addSuggestion({
-                text: `Name card: ${nameCardText}`,
-                imageUrl: data.image_url,
-                source: 'prebaked',
-              });
+              nameCardImageUrl = data.image_url;
             }
           }
         } catch (err) {
           // Fallback to canvas generator if AI fails
-          const nameCardImageUrl = generateNameCardImage({
+          nameCardImageUrl = generateNameCardImage({
             name: nameCardText,
             title: nameCardTitle || undefined,
           });
-          addSuggestion({
-            text: `Name card: ${nameCardText}`,
-            imageUrl: nameCardImageUrl,
-            source: 'prebaked',
-          });
         }
-      } else {
-        // Use canvas generator when AI not available
-        const nameCardImageUrl = generateNameCardImage({
+      }
+      // Fallback if AI unavailable or didn't produce image
+      if (!nameCardImageUrl) {
+        nameCardImageUrl = generateNameCardImage({
           name: nameCardText,
           title: nameCardTitle || undefined,
-        });
-        addSuggestion({
-          text: `Name card: ${nameCardText}`,
-          imageUrl: nameCardImageUrl,
-          source: 'prebaked',
         });
       }
     }
 
+    // NOW start recording
+    compositorRef.current?.start();
+    startRecording(canvasRef.current, webcamStream, screenStream);
+    startSession();
+
+    // Add name card suggestion with pre-generated image
+    if (nameCardText && nameCardImageUrl) {
+      addSuggestion({
+        text: `Name card: ${nameCardText}`,
+        imageUrl: nameCardImageUrl,
+        source: 'prebaked',
+      });
+    }
+
     setMode('recording');
-  }, [webcamStream, screenStream, startRecording, startSession, nameCardText, nameCardTitle, addSuggestion, isAIAvailable]);
+    setIsStartingRecording(false);
+  }, [webcamStream, screenStream, startRecording, startSession, nameCardText, nameCardTitle, addSuggestion, isAIAvailable, isStartingRecording]);
 
   // Set up display video when recording starts
   useEffect(() => {
@@ -531,17 +565,17 @@ export function RecordPage() {
             <div className="pt-4">
               <button
                 onClick={handleStartRecording}
-                disabled={!webcamStream}
+                disabled={!webcamStream || isStartingRecording}
                 className="w-full px-6 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg text-lg font-medium"
               >
-                Start Recording
+                {isStartingRecording ? 'Generating name card...' : 'Start Recording'}
               </button>
             </div>
           </div>
         )}
 
         {mode === 'recording' && (
-          <div className="max-w-5xl mx-auto space-y-4">
+          <div className="max-w-5xl mx-auto space-y-4 pb-36">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
@@ -549,6 +583,12 @@ export function RecordPage() {
                   <span className="text-xl font-mono">{formatDuration(duration)}</span>
                 </div>
                 <VUMeter stream={webcamStream} />
+                {isAIAvailable && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
+                    <span className="text-gray-400">{wsConnected ? 'AI connected' : 'Connecting...'}</span>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-400">
                 <span>1/2/3 layouts</span>
@@ -568,7 +608,11 @@ export function RecordPage() {
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            {isAIAvailable && (
+              <TranscriptDisplay className="mt-4 border border-gray-700" maxHeight="200px" />
+            )}
+
+            <div className="grid grid-cols-3 gap-4 mt-4">
               <div className="flex gap-2">
                 {(['face_card', 'face_only', 'screen_pip'] as LayoutMode[]).map((l, i) => (
                   <button
@@ -601,10 +645,6 @@ export function RecordPage() {
                 </button>
               </div>
             </div>
-
-            {isAIAvailable && (
-              <TranscriptDisplay className="mt-4" maxHeight="120px" />
-            )}
           </div>
         )}
 
@@ -613,6 +653,7 @@ export function RecordPage() {
             onInsert={handleInsertSuggestion}
             onClear={handleClearOverlay}
             hasOverlay={hasOverlay}
+            isGenerating={isGeneratingImage}
           />
         )}
 

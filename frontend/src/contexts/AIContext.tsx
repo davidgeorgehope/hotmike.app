@@ -8,6 +8,9 @@ export interface Suggestion {
   searchQuery?: string;
   source: 'ai' | 'manual' | 'prebaked';
   timestamp: number;
+  // Overlay positioning from LLM
+  overlayPosition?: 'center' | 'center-left' | 'center-right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  overlayScale?: number;  // 0.1 to 1.0
 }
 
 export interface TranscriptSegment {
