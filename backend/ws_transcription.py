@@ -9,12 +9,9 @@ from websocket_manager import get_connection_manager
 from ai_service import get_ai_service
 from rate_limiter import get_rate_limiter
 from config import is_ai_available
+from auth_utils import SECRET_KEY, ALGORITHM
 
 logger = logging.getLogger(__name__)
-
-# JWT settings (should match user_auth.py)
-SECRET_KEY = "your-secret-key-change-in-production"
-ALGORITHM = "HS256"
 
 router = APIRouter()
 

@@ -304,21 +304,19 @@ Respond ONLY with valid JSON, no other text:
             return {"error": "AI service not available", "image_url": None, "filename": None}
 
         title_text = f", {title}" if title else ""
-        prompt = f"""Create a professional broadcast-quality lower-third name card graphic for video.
+        prompt = f"""Create an isolated lower-third name card graphic.
 
 Name: {name}{title_text}
 
-Requirements:
-- Modern, clean broadcast TV style lower-third graphic
-- Semi-transparent dark background with subtle gradient
-- Clean white text for the name (prominent)
-- Smaller gray text for the title (if provided)
-- Subtle blue accent line or element
-- Left-aligned text layout
-- Designed for 16:9 video overlay
-- Professional corporate/news broadcast aesthetic
-- High contrast for readability over video
-- No faces or photographs, just typography and design elements"""
+This is a PNG overlay graphic, NOT a video or scene. Generate ONLY the graphic element itself:
+- Dark semi-transparent rectangular background
+- White text for the name (bold, prominent)
+- Smaller gray text for the title if provided
+- Subtle accent line or design element
+- Left-aligned text
+- The graphic should be positioned in the lower-left area of the frame
+- Clean, professional broadcast TV aesthetic
+- NO background scene, NO video frame, NO person - ONLY the name card graphic itself"""
 
         return await self.generate_image(prompt, aspect_ratio="16:9")
 
