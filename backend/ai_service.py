@@ -17,6 +17,7 @@ GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 
 # Model IDs
 IMAGE_MODEL = "gemini-3-pro-image-preview"
+TRANSCRIPTION_MODEL = "gemini-3-pro-preview"  # Better for audio transcription
 LLM_MODEL = "gemini-3-flash-preview"
 
 
@@ -104,20 +105,23 @@ class AIService:
 
         try:
             response = await self._client.aio.models.generate_content(
-                model=LLM_MODEL,
+                model=TRANSCRIPTION_MODEL,
                 contents=[
+                    "Generate a verbatim transcript of this audio. "
+                    "Include all spoken words exactly as said. "
+                    "If there is no speech or audio is silent, return exactly: [silence]",
                     types.Part.from_bytes(
                         data=audio_bytes,
                         mime_type=mime_type
                     ),
-                    "Transcribe this audio. Return only the transcribed text, nothing else. If there is no speech, return an empty string."
                 ]
             )
 
-            return {
-                "text": response.text.strip() if response.text else "",
-                "error": None
-            }
+            text = response.text.strip() if response.text else ""
+            # Filter out silence markers
+            if text == "[silence]" or not text:
+                return {"text": "", "error": None}
+            return {"text": text, "error": None}
         except Exception as e:
             return {
                 "text": "",
@@ -192,10 +196,18 @@ Respond in this exact JSON format:
       "suggestion": "Description of visual to show",
       "search_query": "Search terms for image",
       "image_prompt": "Detailed prompt for AI image generation",
-      "importance": "high/medium/low"
+      "importance": "high/medium/low",
+      "position": "center|center-left|center-right|top-left|top-right|bottom-left|bottom-right",
+      "scale": 0.4
     }}
   ]
 }}
+
+Position guidelines:
+- Use "center" for full-frame illustrations or hero images
+- Use "bottom-right" or "bottom-left" for supporting graphics, charts, lower-thirds
+- Use "top-right" or "top-left" for small icons, logos, or badges
+- Scale: 0.3=small, 0.5=medium, 0.7=large
 
 Only include genuinely useful moments. Return empty moments array if none found."""
 

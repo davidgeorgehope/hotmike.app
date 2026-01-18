@@ -44,6 +44,7 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
         const webcamAudioStream = new MediaStream(webcamAudioTracks);
         const webcamSource = audioContextRef.current.createMediaStreamSource(webcamAudioStream);
         webcamSource.connect(dest);
+        console.log('[MediaRecorder] Connected webcam audio to destination, tracks:', webcamAudioTracks.length);
       }
     }
 
@@ -53,17 +54,28 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
         const screenAudioStream = new MediaStream(screenAudioTracks);
         const screenSource = audioContextRef.current.createMediaStreamSource(screenAudioStream);
         screenSource.connect(dest);
+        console.log('[MediaRecorder] Connected screen audio to destination, tracks:', screenAudioTracks.length);
       }
     }
 
-    const audioStream = dest.stream.getAudioTracks().length > 0 ? dest.stream : null;
+    // For transcription, use raw webcam audio directly (not Web Audio API mixed)
+    // The Web Audio API MediaStreamDestination may not produce audio until actively processing
+    let transcriptionAudioStream: MediaStream | null = null;
+    if (webcamStream) {
+      const audioTracks = webcamStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        transcriptionAudioStream = new MediaStream(audioTracks);
+        console.log('[MediaRecorder] Created transcription audio stream with', audioTracks.length, 'tracks');
+        console.log('[MediaRecorder] Audio track settings:', JSON.stringify(audioTracks[0].getSettings()));
+      }
+    }
 
     return {
       combinedStream: new MediaStream([
         ...videoTracks,
         ...dest.stream.getAudioTracks(),
       ]),
-      audioStream,
+      audioStream: transcriptionAudioStream,  // Use raw audio for transcription, not dest.stream
     };
   }, []);
 
@@ -104,12 +116,13 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
 
       audioRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
+          console.log('[MediaRecorder] Audio chunk available:', e.data.size, 'bytes, type:', e.data.type);
           options.onDataAvailable!(e.data);
         }
       };
 
       audioRecorderRef.current = audioRecorder;
-      audioRecorder.start(5000); // Send audio chunks every 5 seconds
+      audioRecorder.start(15000); // Send audio chunks every 15 seconds for better transcription
     }
 
     recorder.onstop = () => {

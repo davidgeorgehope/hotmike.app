@@ -29,7 +29,19 @@ export function RecordPage() {
     pipShape, setPipShape,
   } = useRecording();
 
-  const { webcamStream, screenStream, requestWebcam, requestScreen, stopAll, error: mediaError } = useMediaDevices();
+  const {
+    webcamStream,
+    screenStream,
+    requestWebcam,
+    requestScreen,
+    stopAll,
+    error: mediaError,
+    availableDevices,
+    selectedVideoDeviceId,
+    selectedAudioDeviceId,
+    setVideoDevice,
+    setAudioDevice,
+  } = useMediaDevices();
   const {
     isAIAvailable,
     suggestions,
@@ -41,12 +53,13 @@ export function RecordPage() {
     startSession,
     endSession,
     sessionId,
+    getRecentTranscript,
   } = useAI();
 
   const [mode, setMode] = useState<Mode>('setup');
 
   // WebSocket for real-time transcription
-  const { sendAudioChunk, isConnected: wsConnected } = useTranscriptionWebSocket({
+  const { sendAudioChunk, isConnected: wsConnected, detectMoments } = useTranscriptionWebSocket({
     enabled: mode === 'recording' && isAIAvailable,
     sessionId,
   });
@@ -117,6 +130,20 @@ export function RecordPage() {
       setMode('preview');
     }
   }, [recordedBlob]);
+
+  // Periodically detect visual moments from transcript
+  useEffect(() => {
+    if (mode !== 'recording' || !wsConnected || !isAIAvailable) return;
+
+    const intervalId = setInterval(() => {
+      const recentTranscript = getRecentTranscript(30000); // Last 30 seconds
+      if (recentTranscript.trim().length > 20) {
+        detectMoments(recentTranscript);
+      }
+    }, 15000); // Check every 15 seconds
+
+    return () => clearInterval(intervalId);
+  }, [mode, wsConnected, isAIAvailable, getRecentTranscript, detectMoments]);
 
   // Set up preview video after switching to preview mode
   useEffect(() => {
@@ -396,8 +423,40 @@ export function RecordPage() {
               <div className="space-y-4">
                 <h3 className="text-lg font-medium">Media Sources</h3>
                 <div className="flex flex-col gap-3">
+                  {availableDevices.videoInputs.length > 0 && (
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Camera</label>
+                      <select
+                        value={selectedVideoDeviceId || ''}
+                        onChange={(e) => setVideoDevice(e.target.value)}
+                        className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        {availableDevices.videoInputs.map((device) => (
+                          <option key={device.deviceId} value={device.deviceId}>
+                            {device.label || `Camera ${device.deviceId.slice(0, 8)}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {availableDevices.audioInputs.length > 0 && (
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Microphone</label>
+                      <select
+                        value={selectedAudioDeviceId || ''}
+                        onChange={(e) => setAudioDevice(e.target.value)}
+                        className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        {availableDevices.audioInputs.map((device) => (
+                          <option key={device.deviceId} value={device.deviceId}>
+                            {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <button
-                    onClick={requestWebcam}
+                    onClick={() => requestWebcam()}
                     className={`px-4 py-3 rounded-lg border ${
                       webcamStream
                         ? 'bg-green-600 border-green-500'

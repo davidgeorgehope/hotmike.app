@@ -84,6 +84,7 @@ async def transcription_websocket(
                 continue
 
             msg_type = message.get("type")
+            print(f"[WS] Received message type: {msg_type}", flush=True)
 
             if msg_type == "ping":
                 await manager.send_personal_message({
@@ -122,10 +123,20 @@ async def transcription_websocket(
 
                 try:
                     audio_bytes = base64.b64decode(audio_base64)
+                    print(f"[WS] Audio bytes received: {len(audio_bytes)} bytes", flush=True)
                 except Exception:
                     await manager.send_personal_message({
                         "type": "error",
                         "message": "Invalid audio data encoding"
+                    }, websocket)
+                    continue
+
+                # Skip if audio is too small (likely empty/corrupt)
+                if len(audio_bytes) < 1000:
+                    print(f"[WS] Audio chunk too small ({len(audio_bytes)} bytes), skipping", flush=True)
+                    await manager.send_personal_message({
+                        "type": "error",
+                        "message": f"Audio chunk too small ({len(audio_bytes)} bytes)"
                     }, websocket)
                     continue
 
@@ -134,14 +145,17 @@ async def transcription_websocket(
 
                 # Transcribe
                 mime_type = message.get("mime_type", "audio/webm")
+                print(f"[WS] Transcribing audio, mime_type: {mime_type}", flush=True)
                 result = await ai_service.transcribe_audio_chunk(audio_bytes, mime_type)
 
                 if result.get("error"):
+                    print(f"[WS] Transcription error: {result['error']}", flush=True)
                     await manager.send_personal_message({
                         "type": "error",
                         "message": f"Transcription failed: {result['error']}"
                     }, websocket)
                 else:
+                    print(f"[WS] Transcription result: {result['text'][:100] if result['text'] else '(empty)'}", flush=True)
                     await manager.send_personal_message({
                         "type": "transcription",
                         "text": result["text"],
@@ -253,7 +267,9 @@ async def transcription_websocket(
                 rate_limiter.record_call(user["id"], session_id, "moment_detection")
 
                 # Detect moments
+                print(f"[WS] Detecting moments for transcript: {transcript_window[:100]}...", flush=True)
                 moments = await ai_service.detect_visual_moments(transcript_window)
+                print(f"[WS] Detected {len(moments)} visual moments", flush=True)
 
                 await manager.send_personal_message({
                     "type": "visual_moments",

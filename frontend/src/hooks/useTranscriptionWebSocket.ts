@@ -28,6 +28,8 @@ interface WebSocketMessage {
     search_query: string;
     image_prompt?: string;
     importance: string;
+    position?: string;
+    scale?: number;
   }>;
 }
 
@@ -104,10 +106,16 @@ export function useTranscriptionWebSocket({ enabled, sessionId }: UseTranscripti
               // Handle detected visual moments - add each as a suggestion
               if (data.moments && data.moments.length > 0) {
                 for (const moment of data.moments) {
+                  const validPositions = ['center', 'center-left', 'center-right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+                  const position = validPositions.includes(moment.position as typeof validPositions[number])
+                    ? moment.position as typeof validPositions[number]
+                    : 'bottom-right';
                   addSuggestion({
                     text: moment.suggestion,
                     searchQuery: moment.search_query,
                     source: 'ai',
+                    overlayPosition: position,
+                    overlayScale: moment.scale || 0.4,
                   });
                 }
               }
