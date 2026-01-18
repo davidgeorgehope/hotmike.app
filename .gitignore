@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Recordings/uploads
+recordings/
+uploads/
