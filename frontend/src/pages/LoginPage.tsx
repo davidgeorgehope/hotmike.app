@@ -92,6 +92,12 @@ export function LoginPage() {
                   Sign up
                 </Link>
               </p>
+              <p className="text-center text-sm text-muted-foreground mt-4">
+                Contact:{' '}
+                <a href="mailto:me@davidgeorgehope.com" className="text-primary hover:underline">
+                  me@davidgeorgehope.com
+                </a>
+              </p>
             </form>
           </CardContent>
         </Card>
