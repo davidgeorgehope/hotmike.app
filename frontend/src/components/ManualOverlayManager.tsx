@@ -1,6 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Upload, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { overlaysApi, Overlay } from '../lib/api';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 interface ManualOverlayManagerProps {
   isOpen: boolean;
@@ -71,22 +87,17 @@ export function ManualOverlayManager({ isOpen, onClose, onSelectOverlay }: Manua
     onClose();
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-      <div className="bg-gray-900 rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-gray-800">
-          <h2 className="text-xl font-semibold">Overlay Images</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white text-2xl leading-none"
-          >
-            &times;
-          </button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col p-0 gap-0">
+        <DialogHeader className="p-4 border-b border-border">
+          <DialogTitle>Overlay Images</DialogTitle>
+          <DialogDescription>
+            Upload and manage your overlay images
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="p-4 border-b border-gray-800">
+        <div className="p-4 border-b border-border flex items-center gap-3">
           <input
             ref={fileInputRef}
             type="file"
@@ -95,73 +106,105 @@ export function ManualOverlayManager({ isOpen, onClose, onSelectOverlay }: Manua
             className="hidden"
             id="overlay-upload"
           />
-          <label
-            htmlFor="overlay-upload"
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg cursor-pointer ${
-              isUploading
-                ? 'bg-gray-700 cursor-not-allowed'
-                : 'bg-blue-600 hover:bg-blue-700'
-            }`}
+          <Button
+            asChild
+            disabled={isUploading}
           >
-            {isUploading ? 'Uploading...' : 'Upload Image'}
-          </label>
-          <span className="ml-3 text-sm text-gray-400">
+            <label htmlFor="overlay-upload" className="cursor-pointer">
+              <Upload className="w-4 h-4 mr-2" />
+              {isUploading ? 'Uploading...' : 'Upload Image'}
+            </label>
+          </Button>
+          <span className="text-sm text-muted-foreground">
             PNG, JPEG, WebP, GIF (max 5MB)
           </span>
         </div>
 
-        {error && (
-          <div className="p-4 bg-red-500/10 border-b border-red-500 text-red-500 text-sm">
-            {error}
-          </div>
-        )}
+        <AnimatePresence mode="wait">
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="px-4 py-3 bg-destructive/10 border-b border-destructive text-destructive text-sm"
+            >
+              {error}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="flex-1 overflow-y-auto p-4">
           {isLoading ? (
-            <div className="text-center text-gray-400 py-8">Loading...</div>
+            <div className="text-center text-muted-foreground py-8">Loading...</div>
           ) : overlays.length === 0 ? (
-            <div className="text-center text-gray-400 py-8">
+            <div className="text-center text-muted-foreground py-8">
               No overlays uploaded yet. Upload an image to get started.
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-4">
-              {overlays.map((overlay) => (
-                <div
-                  key={overlay.id}
-                  className="relative group bg-gray-800 rounded-lg overflow-hidden aspect-video"
-                >
-                  <img
-                    src={overlaysApi.getImageUrl(overlay.id)}
-                    alt={overlay.original_name}
-                    className="w-full h-full object-contain"
-                  />
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                    <button
-                      onClick={() => handleSelect(overlay)}
-                      className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm"
-                    >
-                      Use
-                    </button>
-                    <button
-                      onClick={() => handleDelete(overlay.id)}
-                      className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-1 text-xs truncate">
-                    {overlay.original_name}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <TooltipProvider delayDuration={300}>
+              <div className="grid grid-cols-3 gap-4">
+                <AnimatePresence>
+                  {overlays.map((overlay, index) => (
+                    <Tooltip key={overlay.id}>
+                      <TooltipTrigger asChild>
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.9 }}
+                          transition={{ delay: index * 0.05 }}
+                          whileHover={{ scale: 1.02 }}
+                          className="relative group bg-card rounded-lg overflow-hidden aspect-video border border-border cursor-pointer"
+                        >
+                          <img
+                            src={overlaysApi.getImageUrl(overlay.id)}
+                            alt={overlay.original_name}
+                            className="w-full h-full object-contain"
+                          />
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            whileHover={{ opacity: 1 }}
+                            className="absolute inset-0 bg-black/60 flex items-center justify-center gap-2"
+                          >
+                            <Button
+                              size="sm"
+                              onClick={() => handleSelect(overlay)}
+                            >
+                              Use
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleDelete(overlay.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </motion.div>
+                          <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-1 text-xs truncate">
+                            {overlay.original_name}
+                          </div>
+                        </motion.div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="p-0 border-0 bg-transparent">
+                        <motion.img
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          src={overlaysApi.getImageUrl(overlay.id)}
+                          alt={overlay.original_name}
+                          className="max-w-[400px] max-h-[300px] rounded-lg shadow-xl object-contain"
+                        />
+                      </TooltipContent>
+                    </Tooltip>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </TooltipProvider>
           )}
         </div>
 
-        <div className="p-4 border-t border-gray-800 text-sm text-gray-400">
+        <div className="p-4 border-t border-border text-sm text-muted-foreground">
           Click an image to add it as a suggestion. Press [4] during recording to insert.
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

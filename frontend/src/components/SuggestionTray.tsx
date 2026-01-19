@@ -1,4 +1,15 @@
+import { motion, AnimatePresence } from 'framer-motion';
+import { Loader2 } from 'lucide-react';
 import { useAI } from '../contexts/AIContext';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 interface SuggestionTrayProps {
   onInsert: () => void;
@@ -19,127 +30,147 @@ export function SuggestionTray({ onInsert, onClear, hasOverlay, isGenerating = f
   const currentSuggestion = getCurrentSuggestion();
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-gray-900/95 border-t border-gray-700 backdrop-blur-sm">
+    <motion.div
+      initial={{ y: 100, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 100, opacity: 0 }}
+      transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+      className="fixed bottom-0 left-0 right-0 bg-card/95 border-t border-border backdrop-blur-sm z-40"
+    >
       <div className="max-w-5xl mx-auto px-4 py-3">
         <div className="flex items-center justify-between gap-4">
           {/* Suggestion display */}
           <div className="flex-1 min-w-0">
-            {currentSuggestion ? (
-              <div className="flex items-center gap-3">
-                {currentSuggestion.imageUrl ? (
-                  <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0 border border-gray-600">
-                    <img
-                      src={currentSuggestion.imageUrl}
-                      alt="Suggestion preview"
-                      className="w-full h-full object-cover"
-                    />
+            <AnimatePresence mode="wait">
+              {currentSuggestion ? (
+                <motion.div
+                  key={currentSuggestion.id}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  className="flex items-center gap-3"
+                >
+                  {currentSuggestion.imageUrl ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <motion.div
+                            whileHover={{ scale: 1.1 }}
+                            className="w-16 h-16 rounded-lg overflow-hidden bg-secondary flex-shrink-0 border border-border cursor-pointer"
+                          >
+                            <img
+                              src={currentSuggestion.imageUrl}
+                              alt="Suggestion preview"
+                              className="w-full h-full object-cover"
+                            />
+                          </motion.div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="p-0 border-0">
+                          <img
+                            src={currentSuggestion.imageUrl}
+                            alt="Suggestion preview"
+                            className="max-w-[300px] max-h-[200px] rounded-lg object-contain"
+                          />
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : currentSuggestion.searchQuery ? (
+                    <div className="w-16 h-16 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground text-xs border border-border flex-shrink-0 text-center p-1">
+                      {isGenerating ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <span className="text-[10px]">Generating</span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] leading-tight">Press 4 to generate</span>
+                      )}
+                    </div>
+                  ) : null}
+                  <div className="min-w-0">
+                    <p className="text-foreground font-medium line-clamp-2" title={currentSuggestion.text}>
+                      {currentSuggestion.text}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="secondary" className="text-xs">
+                        {currentSuggestion.source === 'ai' && 'AI Suggestion'}
+                        {currentSuggestion.source === 'manual' && 'Manual Overlay'}
+                        {currentSuggestion.source === 'prebaked' && 'From Talk Track'}
+                      </Badge>
+                      {suggestions.length > 1 && (
+                        <span className="text-sm text-muted-foreground">
+                          ({currentSuggestionIndex + 1}/{suggestions.length})
+                        </span>
+                      )}
+                    </div>
                   </div>
-                ) : currentSuggestion.searchQuery ? (
-                  <div className="w-16 h-16 rounded-lg bg-gray-800 flex items-center justify-center text-gray-500 text-xs border border-gray-600 flex-shrink-0 text-center p-1">
-                    {isGenerating ? (
-                      <div className="flex flex-col items-center gap-0.5">
-                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span className="text-[10px]">Generating</span>
-                      </div>
-                    ) : (
-                      <span className="text-[10px] leading-tight">Press 4 to generate</span>
-                    )}
-                  </div>
-                ) : null}
-                <div className="min-w-0">
-                  <p className="text-white font-medium line-clamp-2" title={currentSuggestion.text}>
-                    {currentSuggestion.text}
-                  </p>
-                  <p className="text-sm text-gray-400">
-                    {currentSuggestion.source === 'ai' && 'AI Suggestion'}
-                    {currentSuggestion.source === 'manual' && 'Manual Overlay'}
-                    {currentSuggestion.source === 'prebaked' && 'From Talk Track'}
-                    {suggestions.length > 1 && (
-                      <span className="ml-2">
-                        ({currentSuggestionIndex + 1}/{suggestions.length})
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-gray-500">
-                {hasOverlay ? 'Overlay active - press [5] to clear' : 'No suggestions available'}
-              </p>
-            )}
+                </motion.div>
+              ) : (
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-muted-foreground"
+                >
+                  {hasOverlay ? 'Overlay active - press [5] to clear' : 'No suggestions available'}
+                </motion.p>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Hotkey buttons */}
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
+            <Button
               onClick={onInsert}
               disabled={!currentSuggestion || isGenerating}
-              className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
-                currentSuggestion && !isGenerating
-                  ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                  : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-              }`}
+              className={cn(
+                'gap-2',
+                currentSuggestion && !isGenerating ? '' : 'opacity-50'
+              )}
             >
               {isGenerating ? (
                 <>
-                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
+                  <Loader2 className="h-4 w-4 animate-spin" />
                   Generating...
                 </>
               ) : (
                 <>
-                  <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs">4</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs font-mono">4</kbd>
                   Insert
                 </>
               )}
-            </button>
+            </Button>
 
-            <button
+            <Button
+              variant="secondary"
               onClick={nextSuggestion}
               disabled={suggestions.length <= 1}
-              className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
-                suggestions.length > 1
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-              }`}
+              className="gap-2"
             >
-              <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs">Tab</kbd>
+              <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs font-mono">Tab</kbd>
               Next
-            </button>
+            </Button>
 
-            <button
+            <Button
+              variant="secondary"
               onClick={() => currentSuggestion && dismissSuggestion(currentSuggestion.id)}
               disabled={!currentSuggestion}
-              className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
-                currentSuggestion
-                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                  : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-              }`}
+              className="gap-2"
             >
-              <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs">`</kbd>
+              <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs font-mono">`</kbd>
               Dismiss
-            </button>
+            </Button>
 
-            <button
+            <Button
+              variant="destructive"
               onClick={onClear}
               disabled={!hasOverlay}
-              className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
-                hasOverlay
-                  ? 'bg-red-600 hover:bg-red-700 text-white'
-                  : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-              }`}
+              className="gap-2"
             >
-              <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs">5</kbd>
+              <kbd className="px-1.5 py-0.5 bg-black/30 rounded text-xs font-mono">5</kbd>
               Clear
-            </button>
+            </Button>
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

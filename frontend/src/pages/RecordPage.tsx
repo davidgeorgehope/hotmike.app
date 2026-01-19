@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { FolderOpen, LogOut, Plus, Square, Video, Image, FileText } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRecording } from '../contexts/RecordingContext';
 import { useAI } from '../contexts/AIContext';
@@ -14,8 +16,27 @@ import { ManualOverlayManager } from '../components/ManualOverlayManager';
 import { TranscriptDisplay } from '../components/TranscriptDisplay';
 import { SuggestionTray } from '../components/SuggestionTray';
 import { TalkTrackInput } from '../components/TalkTrackInput';
+import {
+  VideoPreview,
+  CountdownOverlay,
+  RecordingIndicator,
+  ConnectionStatus,
+  DraggableOverlay,
+} from '../components/recording';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
-type Mode = 'setup' | 'recording' | 'preview';
+type Mode = 'setup' | 'countdown' | 'recording' | 'preview';
 
 export function RecordPage() {
   const { token, logout } = useAuth();
@@ -58,7 +79,6 @@ export function RecordPage() {
 
   const [mode, setMode] = useState<Mode>('setup');
 
-  // WebSocket for real-time transcription
   const { sendAudioChunk, isConnected: wsConnected, detectMoments } = useTranscriptionWebSocket({
     enabled: mode === 'recording' && isAIAvailable,
     sessionId,
@@ -73,11 +93,14 @@ export function RecordPage() {
   const [showOverlayManager, setShowOverlayManager] = useState(false);
   const [showTalkTrackInput, setShowTalkTrackInput] = useState(false);
   const [hasOverlay, setHasOverlay] = useState(false);
+  const [overlayImageUrl, setOverlayImageUrl] = useState<string | null>(null);
+  const [overlayPosition, setOverlayPosition] = useState({ x: 75, y: 75 }); // Start at bottom-right
   const [voiceCommandsEnabled, setVoiceCommandsEnabled] = useState(true);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isStartingRecording, setIsStartingRecording] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
@@ -124,59 +147,57 @@ export function RecordPage() {
     }
   }, [screenStream]);
 
-  // Switch to preview mode when recording finishes
   useEffect(() => {
     if (recordedBlob) {
       setMode('preview');
     }
   }, [recordedBlob]);
 
-  // Periodically detect visual moments from transcript
   useEffect(() => {
     if (mode !== 'recording' || !wsConnected || !isAIAvailable) return;
 
     const intervalId = setInterval(() => {
-      const recentTranscript = getRecentTranscript(30000); // Last 30 seconds
+      const recentTranscript = getRecentTranscript(30000);
       if (recentTranscript.trim().length > 20) {
         detectMoments(recentTranscript);
       }
-    }, 15000); // Check every 15 seconds
+    }, 15000);
 
     return () => clearInterval(intervalId);
   }, [mode, wsConnected, isAIAvailable, getRecentTranscript, detectMoments]);
 
-  // Set up preview video after switching to preview mode
   useEffect(() => {
     if (mode === 'preview' && recordedBlob && previewVideoRef.current) {
       previewVideoRef.current.src = URL.createObjectURL(recordedBlob);
     }
   }, [mode, recordedBlob]);
 
-  // Handle inserting current suggestion
   const handleInsertSuggestion = useCallback(async () => {
     const suggestion = getCurrentSuggestion();
     if (!suggestion || !compositorRef.current || isGeneratingImage) return;
 
-    // Apply positioning if available on the suggestion
+    // Reset position to default
+    const defaultPosition = { x: 75, y: 75 };
+    setOverlayPosition(defaultPosition);
+
     if (suggestion.overlayPosition || suggestion.overlayScale) {
       compositorRef.current.setOverlayOptions({
-        position: suggestion.overlayPosition || 'bottom-right',
+        position: defaultPosition,
         scale: suggestion.overlayScale || 0.4,
         opacity: 1,
       });
     }
 
     if (suggestion.imageUrl) {
-      // Image exists - insert immediately
       try {
         await compositorRef.current.setOverlayImage(suggestion.imageUrl);
+        setOverlayImageUrl(suggestion.imageUrl);
         setHasOverlay(true);
         acceptSuggestion(suggestion.id);
       } catch (err) {
         console.error('Failed to load overlay:', err);
       }
     } else if (suggestion.searchQuery) {
-      // No image yet - generate one first
       setIsGeneratingImage(true);
       try {
         const response = await fetch('/api/generate-image', {
@@ -187,13 +208,13 @@ export function RecordPage() {
         if (response.ok) {
           const data = await response.json();
           if (data.image_url && compositorRef.current) {
-            // Apply returned positioning from API
             compositorRef.current.setOverlayOptions({
-              position: data.position || 'bottom-right',
+              position: defaultPosition,
               scale: data.scale || 0.4,
               opacity: 1,
             });
             await compositorRef.current.setOverlayImage(data.image_url);
+            setOverlayImageUrl(data.image_url);
             setHasOverlay(true);
             acceptSuggestion(suggestion.id);
           }
@@ -206,15 +227,21 @@ export function RecordPage() {
     }
   }, [getCurrentSuggestion, acceptSuggestion, isGeneratingImage]);
 
-  // Handle clearing overlay
+  const handleOverlayPositionChange = useCallback((position: { x: number; y: number }) => {
+    setOverlayPosition(position);
+    if (compositorRef.current) {
+      compositorRef.current.setOverlayOptions({ position });
+    }
+  }, []);
+
   const handleClearOverlay = useCallback(() => {
     if (compositorRef.current) {
       compositorRef.current.clearOverlay();
       setHasOverlay(false);
+      setOverlayImageUrl(null);
     }
   }, []);
 
-  // Handle dismissing current suggestion
   const handleDismissSuggestion = useCallback(() => {
     const suggestion = getCurrentSuggestion();
     if (suggestion) {
@@ -222,7 +249,6 @@ export function RecordPage() {
     }
   }, [getCurrentSuggestion, dismissSuggestion]);
 
-  // Voice commands integration
   useVoiceCommands(mode === 'recording' && voiceCommandsEnabled && isAIAvailable, {
     onShow: handleInsertSuggestion,
     onNext: nextSuggestion,
@@ -271,12 +297,10 @@ export function RecordPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [mode, setLayout, handleInsertSuggestion, handleClearOverlay, nextSuggestion, dismissSuggestion, getCurrentSuggestion]);
 
-  const handleStartRecording = useCallback(async () => {
+  const handleInitiateRecording = useCallback(async () => {
     if (!canvasRef.current || isStartingRecording) return;
-
     setIsStartingRecording(true);
 
-    // Pre-generate name card if name is set (before recording starts)
     let nameCardImageUrl: string | null = null;
     if (nameCardText && isAIAvailable) {
       try {
@@ -299,12 +323,21 @@ export function RecordPage() {
       }
     }
 
-    // NOW start recording
+    // Store the name card URL for later use
+    (window as unknown as { __nameCardImageUrl?: string | null }).__nameCardImageUrl = nameCardImageUrl;
+
+    setIsStartingRecording(false);
+    setMode('countdown');
+  }, [nameCardText, nameCardTitle, isAIAvailable, isStartingRecording]);
+
+  const handleCountdownComplete = useCallback(() => {
+    if (!canvasRef.current) return;
+
     compositorRef.current?.start();
     startRecording(canvasRef.current, webcamStream, screenStream);
     startSession();
 
-    // Add name card suggestion with pre-generated image
+    const nameCardImageUrl = (window as unknown as { __nameCardImageUrl?: string | null }).__nameCardImageUrl;
     if (nameCardText && nameCardImageUrl) {
       addSuggestion({
         text: `Name card: ${nameCardText}`,
@@ -314,10 +347,8 @@ export function RecordPage() {
     }
 
     setMode('recording');
-    setIsStartingRecording(false);
-  }, [webcamStream, screenStream, startRecording, startSession, nameCardText, nameCardTitle, addSuggestion, isAIAvailable, isStartingRecording]);
+  }, [webcamStream, screenStream, startRecording, startSession, nameCardText, addSuggestion]);
 
-  // Set up display video when recording starts
   useEffect(() => {
     if (mode === 'recording' && displayVideoRef.current && canvasRef.current) {
       const canvasStream = canvasRef.current.captureStream(30);
@@ -368,7 +399,6 @@ export function RecordPage() {
   };
 
   const handleSelectOverlay = (overlayUrl: string) => {
-    // Add the selected overlay to suggestions
     addSuggestion({
       text: 'Manual overlay',
       imageUrl: overlayUrl,
@@ -383,22 +413,18 @@ export function RecordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
         <h1 className="text-xl font-bold">HotMike</h1>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/library')}
-            className="px-4 py-2 text-gray-400 hover:text-white"
-          >
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => navigate('/library')}>
+            <FolderOpen className="w-4 h-4 mr-2" />
             Library
-          </button>
-          <button
-            onClick={logout}
-            className="px-4 py-2 text-gray-400 hover:text-white"
-          >
+          </Button>
+          <Button variant="ghost" onClick={logout}>
+            <LogOut className="w-4 h-4 mr-2" />
             Logout
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -409,289 +435,416 @@ export function RecordPage() {
       </div>
 
       <main className="p-6">
-        {mode === 'setup' && (
-          <div className="max-w-4xl mx-auto space-y-6">
-            <h2 className="text-2xl font-semibold">Setup Recording</h2>
+        <AnimatePresence mode="wait">
+          {mode === 'setup' && (
+            <motion.div
+              key="setup"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-4xl mx-auto space-y-6"
+            >
+              <h2 className="text-2xl font-semibold">Setup Recording</h2>
 
-            {mediaError && (
-              <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded">
-                {mediaError}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Media Sources</h3>
-                <div className="flex flex-col gap-3">
-                  {availableDevices.videoInputs.length > 0 && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">Camera</label>
-                      <select
-                        value={selectedVideoDeviceId || ''}
-                        onChange={(e) => setVideoDevice(e.target.value)}
-                        className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {availableDevices.videoInputs.map((device) => (
-                          <option key={device.deviceId} value={device.deviceId}>
-                            {device.label || `Camera ${device.deviceId.slice(0, 8)}`}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {availableDevices.audioInputs.length > 0 && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">Microphone</label>
-                      <select
-                        value={selectedAudioDeviceId || ''}
-                        onChange={(e) => setAudioDevice(e.target.value)}
-                        className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {availableDevices.audioInputs.map((device) => (
-                          <option key={device.deviceId} value={device.deviceId}>
-                            {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => requestWebcam()}
-                    className={`px-4 py-3 rounded-lg border ${
-                      webcamStream
-                        ? 'bg-green-600 border-green-500'
-                        : 'bg-gray-800 border-gray-700 hover:border-gray-600'
-                    }`}
-                  >
-                    {webcamStream ? 'Webcam Connected' : 'Connect Webcam'}
-                  </button>
-                  <button
-                    onClick={requestScreen}
-                    className={`px-4 py-3 rounded-lg border ${
-                      screenStream
-                        ? 'bg-green-600 border-green-500'
-                        : 'bg-gray-800 border-gray-700 hover:border-gray-600'
-                    }`}
-                  >
-                    {screenStream ? 'Screen Connected' : 'Share Screen'}
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Name Card</h3>
-                <input
-                  type="text"
-                  value={nameCardText}
-                  onChange={(e) => setNameCardText(e.target.value)}
-                  placeholder="Your Name"
-                  className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <input
-                  type="text"
-                  value={nameCardTitle}
-                  onChange={(e) => setNameCardTitle(e.target.value)}
-                  placeholder="Your Title"
-                  className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Layout</h3>
-              <div className="flex gap-3">
-                {(['face_card', 'face_only', 'screen_pip'] as LayoutMode[]).map((l) => (
-                  <button
-                    key={l}
-                    onClick={() => setLayout(l)}
-                    className={`px-4 py-2 rounded-lg border ${
-                      layout === l
-                        ? 'bg-blue-600 border-blue-500'
-                        : 'bg-gray-800 border-gray-700 hover:border-gray-600'
-                    }`}
-                  >
-                    {l === 'face_card' && '1: Face + Card'}
-                    {l === 'face_only' && '2: Face Only'}
-                    {l === 'screen_pip' && '3: Screen + PIP'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">PIP Settings</h3>
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-2">Position</label>
-                  <select
-                    value={pipPosition}
-                    onChange={(e) => setPipPosition(e.target.value as typeof pipPosition)}
-                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="top-left">Top Left</option>
-                    <option value="top-right">Top Right</option>
-                    <option value="bottom-left">Bottom Left</option>
-                    <option value="bottom-right">Bottom Right</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-2">Size</label>
-                  <select
-                    value={pipSize}
-                    onChange={(e) => setPipSize(e.target.value as typeof pipSize)}
-                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="small">Small</option>
-                    <option value="medium">Medium</option>
-                    <option value="large">Large</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-2">Shape</label>
-                  <select
-                    value={pipShape}
-                    onChange={(e) => setPipShape(e.target.value as PIPShape)}
-                    className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="circle">Circle</option>
-                    <option value="square">Square</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Overlays</h3>
-                <button
-                  onClick={() => setShowOverlayManager(true)}
-                  className="w-full px-4 py-3 rounded-lg border bg-gray-800 border-gray-700 hover:border-gray-600"
+              {mediaError && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-destructive/10 border border-destructive text-destructive px-4 py-3 rounded-lg"
                 >
-                  Manage Overlay Images
-                </button>
-                {suggestions.length > 0 && (
-                  <p className="text-sm text-gray-400">
-                    {suggestions.length} overlay{suggestions.length > 1 ? 's' : ''} ready
-                  </p>
-                )}
+                  {mediaError}
+                </motion.div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Video className="w-5 h-5" />
+                      Media Sources
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {availableDevices.videoInputs.length > 0 && (
+                      <div className="space-y-2">
+                        <label className="text-sm text-muted-foreground">Camera</label>
+                        <Select
+                          value={selectedVideoDeviceId || ''}
+                          onValueChange={setVideoDevice}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select camera" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableDevices.videoInputs.map((device) => (
+                              <SelectItem key={device.deviceId} value={device.deviceId}>
+                                {device.label || `Camera ${device.deviceId.slice(0, 8)}`}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {availableDevices.audioInputs.length > 0 && (
+                      <div className="space-y-2">
+                        <label className="text-sm text-muted-foreground">Microphone</label>
+                        <Select
+                          value={selectedAudioDeviceId || ''}
+                          onValueChange={setAudioDevice}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select microphone" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableDevices.audioInputs.map((device) => (
+                              <SelectItem key={device.deviceId} value={device.deviceId}>
+                                {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-2 pt-2">
+                      <Button
+                        variant={webcamStream ? 'default' : 'secondary'}
+                        className={cn(webcamStream && 'bg-success hover:bg-success/90')}
+                        onClick={() => requestWebcam()}
+                      >
+                        {webcamStream ? 'Webcam Connected' : 'Connect Webcam'}
+                      </Button>
+                      <Button
+                        variant={screenStream ? 'default' : 'secondary'}
+                        className={cn(screenStream && 'bg-success hover:bg-success/90')}
+                        onClick={requestScreen}
+                      >
+                        {screenStream ? 'Screen Connected' : 'Share Screen'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Name Card</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-sm text-muted-foreground">Your Name</label>
+                      <Input
+                        value={nameCardText}
+                        onChange={(e) => setNameCardText(e.target.value)}
+                        placeholder="Your Name"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm text-muted-foreground">Your Title</label>
+                      <Input
+                        value={nameCardTitle}
+                        onChange={(e) => setNameCardTitle(e.target.value)}
+                        placeholder="Your Title"
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
 
-              <div className="space-y-4">
-                <h3 className="text-lg font-medium">Talk Tracks</h3>
-                <button
-                  onClick={() => setShowTalkTrackInput(true)}
-                  className="w-full px-4 py-3 rounded-lg border bg-gray-800 border-gray-700 hover:border-gray-600"
-                >
-                  Manage Talk Tracks
-                </button>
-                {isAIAvailable && (
-                  <p className="text-sm text-gray-400">
-                    Prebake visuals from your script
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {isAIAvailable && (
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="voice-commands"
-                  checked={voiceCommandsEnabled}
-                  onChange={(e) => setVoiceCommandsEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded bg-gray-800 border-gray-700"
-                />
-                <label htmlFor="voice-commands" className="text-sm text-gray-400">
-                  Enable voice commands ("Hey Mike, show that")
-                </label>
-              </div>
-            )}
-
-            <div className="pt-4">
-              <button
-                onClick={handleStartRecording}
-                disabled={!webcamStream || isStartingRecording}
-                className="w-full px-6 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg text-lg font-medium"
-              >
-                {isStartingRecording ? 'Generating name card...' : 'Start Recording'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {mode === 'recording' && (
-          <div className="max-w-5xl mx-auto space-y-4 pb-36">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse" />
-                  <span className="text-xl font-mono">{formatDuration(duration)}</span>
-                </div>
-                <VUMeter stream={webcamStream} />
-                {isAIAvailable && (
-                  <div className="flex items-center gap-1.5 text-xs">
-                    <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
-                    <span className="text-gray-400">{wsConnected ? 'AI connected' : 'Connecting...'}</span>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Layout</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-3">
+                    {(['face_card', 'face_only', 'screen_pip'] as LayoutMode[]).map((l) => (
+                      <Button
+                        key={l}
+                        variant={layout === l ? 'default' : 'secondary'}
+                        onClick={() => setLayout(l)}
+                      >
+                        {l === 'face_card' && '1: Face + Card'}
+                        {l === 'face_only' && '2: Face Only'}
+                        {l === 'screen_pip' && '3: Screen + PIP'}
+                      </Button>
+                    ))}
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>PIP Settings</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-sm text-muted-foreground">Position</label>
+                      <Select
+                        value={pipPosition}
+                        onValueChange={(v) => setPipPosition(v as typeof pipPosition)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="top-left">Top Left</SelectItem>
+                          <SelectItem value="top-right">Top Right</SelectItem>
+                          <SelectItem value="bottom-left">Bottom Left</SelectItem>
+                          <SelectItem value="bottom-right">Bottom Right</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm text-muted-foreground">Size</label>
+                      <Select
+                        value={pipSize}
+                        onValueChange={(v) => setPipSize(v as typeof pipSize)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="small">Small</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="large">Large</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm text-muted-foreground">Shape</label>
+                      <Select
+                        value={pipShape}
+                        onValueChange={(v) => setPipShape(v as PIPShape)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="circle">Circle</SelectItem>
+                          <SelectItem value="square">Square</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Image className="w-5 h-5" />
+                      Overlays
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <Button
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => setShowOverlayManager(true)}
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Manage Overlay Images
+                    </Button>
+                    {suggestions.length > 0 && (
+                      <Badge variant="secondary">
+                        {suggestions.length} overlay{suggestions.length > 1 ? 's' : ''} ready
+                      </Badge>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <FileText className="w-5 h-5" />
+                      Talk Tracks
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <Button
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => setShowTalkTrackInput(true)}
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Manage Talk Tracks
+                    </Button>
+                    {isAIAvailable && (
+                      <p className="text-sm text-muted-foreground">
+                        Prebake visuals from your script
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {isAIAvailable && (
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    id="voice-commands"
+                    checked={voiceCommandsEnabled}
+                    onChange={(e) => setVoiceCommandsEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded bg-secondary border-border"
+                  />
+                  <label htmlFor="voice-commands" className="text-sm text-muted-foreground">
+                    Enable voice commands ("Hey Mike, show that")
+                  </label>
+                </div>
+              )}
+
+              <div className="pt-4">
+                <Button
+                  size="lg"
+                  className="w-full bg-recording hover:bg-recording/90 text-recording-foreground"
+                  onClick={handleInitiateRecording}
+                  disabled={!webcamStream || isStartingRecording}
+                >
+                  {isStartingRecording ? 'Preparing...' : 'Start Recording'}
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {mode === 'recording' && (
+            <motion.div
+              key="recording"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="max-w-5xl mx-auto space-y-4 pb-36"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <VUMeter stream={webcamStream} />
+                  {isAIAvailable && (
+                    <ConnectionStatus isConnected={wsConnected} isAIAvailable={isAIAvailable} />
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <kbd className="px-2 py-1 bg-secondary rounded text-xs">1/2/3</kbd> layouts
+                  <span className="text-border">|</span>
+                  <kbd className="px-2 py-1 bg-secondary rounded text-xs">4</kbd> insert
+                  <kbd className="px-2 py-1 bg-secondary rounded text-xs">5</kbd> clear
+                  <span className="text-border">|</span>
+                  <kbd className="px-2 py-1 bg-secondary rounded text-xs">Esc</kbd> stop
+                </div>
+              </div>
+
+              <VideoPreview ref={previewContainerRef} showFrameMarkers>
+                <video
+                  ref={displayVideoRef}
+                  muted
+                  playsInline
+                  className="w-full h-full object-cover"
+                />
+                <RecordingIndicator duration={formatDuration(duration)} />
+                {hasOverlay && overlayImageUrl && (
+                  <DraggableOverlay
+                    imageUrl={overlayImageUrl}
+                    position={overlayPosition}
+                    onPositionChange={handleOverlayPositionChange}
+                    containerRef={previewContainerRef}
+                    scale={0.25}
+                  />
                 )}
-              </div>
-              <div className="flex items-center gap-2 text-sm text-gray-400">
-                <span>1/2/3 layouts</span>
-                <span>|</span>
-                <span>4 insert | 5 clear</span>
-                <span>|</span>
-                <span>Esc stop</span>
-              </div>
-            </div>
+              </VideoPreview>
 
-            <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-              <video
-                ref={displayVideoRef}
-                muted
-                playsInline
-                className="w-full h-full object-cover"
-              />
-            </div>
+              {isAIAvailable && (
+                <TranscriptDisplay className="mt-4" maxHeight="200px" />
+              )}
 
-            {isAIAvailable && (
-              <TranscriptDisplay className="mt-4 border border-gray-700" maxHeight="200px" />
-            )}
-
-            <div className="grid grid-cols-3 gap-4 mt-4">
-              <div className="flex gap-2">
-                {(['face_card', 'face_only', 'screen_pip'] as LayoutMode[]).map((l, i) => (
-                  <button
-                    key={l}
-                    onClick={() => setLayout(l)}
-                    className={`px-3 py-1 rounded text-sm ${
-                      layout === l
-                        ? 'bg-blue-600'
-                        : 'bg-gray-800 hover:bg-gray-700'
-                    }`}
+              <div className="grid grid-cols-3 gap-4 mt-4">
+                <div className="flex gap-2">
+                  {(['face_card', 'face_only', 'screen_pip'] as LayoutMode[]).map((l, i) => (
+                    <Button
+                      key={l}
+                      size="sm"
+                      variant={layout === l ? 'default' : 'secondary'}
+                      onClick={() => setLayout(l)}
+                    >
+                      {i + 1}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex justify-center">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setShowOverlayManager(true)}
                   >
-                    {i + 1}
-                  </button>
-                ))}
+                    <Plus className="w-4 h-4 mr-1" />
+                    Overlay
+                  </Button>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    variant="destructive"
+                    onClick={handleStopRecording}
+                  >
+                    <Square className="w-4 h-4 mr-2" />
+                    Stop Recording
+                  </Button>
+                </div>
               </div>
-              <div className="flex justify-center">
-                <button
-                  onClick={() => setShowOverlayManager(true)}
-                  className="px-3 py-1 rounded text-sm bg-gray-800 hover:bg-gray-700"
+            </motion.div>
+          )}
+
+          {mode === 'preview' && recordedBlob && (
+            <motion.div
+              key="preview"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-3xl mx-auto space-y-6"
+            >
+              <h2 className="text-2xl font-semibold">Recording Complete</h2>
+
+              {saveError && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-destructive/10 border border-destructive text-destructive px-4 py-3 rounded-lg"
                 >
-                  + Overlay
-                </button>
+                  {saveError}
+                </motion.div>
+              )}
+
+              <VideoPreview showFrameMarkers={false}>
+                <video
+                  ref={previewVideoRef}
+                  controls
+                  className="w-full h-full"
+                />
+              </VideoPreview>
+
+              <div className="space-y-2">
+                <label className="text-sm text-muted-foreground">Title</label>
+                <Input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Give your recording a title"
+                />
               </div>
-              <div className="flex justify-end">
-                <button
-                  onClick={handleStopRecording}
-                  className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium"
+
+              <div className="flex gap-3">
+                <Button
+                  className="flex-1"
+                  onClick={handleSave}
+                  disabled={isSaving}
                 >
-                  Stop Recording
-                </button>
+                  {isSaving ? 'Saving...' : 'Save to Library'}
+                </Button>
+                <Button variant="secondary" onClick={handleDownload}>
+                  Download
+                </Button>
+                <Button variant="ghost" onClick={handleDiscard}>
+                  Discard
+                </Button>
               </div>
-            </div>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {mode === 'recording' && (
           <SuggestionTray
@@ -701,60 +854,12 @@ export function RecordPage() {
             isGenerating={isGeneratingImage}
           />
         )}
-
-        {mode === 'preview' && recordedBlob && (
-          <div className="max-w-3xl mx-auto space-y-6">
-            <h2 className="text-2xl font-semibold">Recording Complete</h2>
-
-            {saveError && (
-              <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded">
-                {saveError}
-              </div>
-            )}
-
-            <div className="aspect-video bg-black rounded-lg overflow-hidden">
-              <video
-                ref={previewVideoRef}
-                controls
-                className="w-full h-full"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">Title</label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Give your recording a title"
-                className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed rounded-lg font-medium"
-              >
-                {isSaving ? 'Saving...' : 'Save to Library'}
-              </button>
-              <button
-                onClick={handleDownload}
-                className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium"
-              >
-                Download
-              </button>
-              <button
-                onClick={handleDiscard}
-                className="px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg font-medium text-gray-400"
-              >
-                Discard
-              </button>
-            </div>
-          </div>
-        )}
       </main>
+
+      <CountdownOverlay
+        isActive={mode === 'countdown'}
+        onComplete={handleCountdownComplete}
+      />
 
       <ManualOverlayManager
         isOpen={showOverlayManager}

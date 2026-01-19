@@ -26,7 +26,7 @@ export interface CompositorOptions {
 
 export interface OverlayOptions {
   opacity: number;  // 0-1
-  position: OverlayPosition;
+  position: OverlayPosition | { x: number; y: number };  // preset or percentage-based {x: 0-100, y: 0-100}
   scale: number;  // 0.1-1
 }
 
@@ -297,41 +297,52 @@ export class Compositor {
     let x: number, y: number;
     const margin = 32;
 
-    switch (position) {
-      case 'top-left':
-        x = margin;
-        y = margin;
-        break;
-      case 'top-right':
-        x = CANVAS_WIDTH - imgWidth - margin;
-        y = margin;
-        break;
-      case 'bottom-left':
-        x = margin;
-        y = CANVAS_HEIGHT - imgHeight - margin;
-        break;
-      case 'bottom-right':
-        x = CANVAS_WIDTH - imgWidth - margin;
-        y = CANVAS_HEIGHT - imgHeight - margin;
-        break;
-      case 'center-left':
-        x = margin;
-        y = (CANVAS_HEIGHT - imgHeight) / 2;
-        break;
-      case 'center-right':
-        x = CANVAS_WIDTH - imgWidth - margin;
-        y = (CANVAS_HEIGHT - imgHeight) / 2;
-        break;
-      case 'center':
-      default:
-        x = (CANVAS_WIDTH - imgWidth) / 2;
-        y = (CANVAS_HEIGHT - imgHeight) / 2;
-        break;
+    // Support both preset positions and percentage-based coordinates
+    if (typeof position === 'object' && 'x' in position && 'y' in position) {
+      // Percentage-based positioning (0-100)
+      x = (position.x / 100) * (CANVAS_WIDTH - imgWidth);
+      y = (position.y / 100) * (CANVAS_HEIGHT - imgHeight);
+    } else {
+      switch (position) {
+        case 'top-left':
+          x = margin;
+          y = margin;
+          break;
+        case 'top-right':
+          x = CANVAS_WIDTH - imgWidth - margin;
+          y = margin;
+          break;
+        case 'bottom-left':
+          x = margin;
+          y = CANVAS_HEIGHT - imgHeight - margin;
+          break;
+        case 'bottom-right':
+          x = CANVAS_WIDTH - imgWidth - margin;
+          y = CANVAS_HEIGHT - imgHeight - margin;
+          break;
+        case 'center-left':
+          x = margin;
+          y = (CANVAS_HEIGHT - imgHeight) / 2;
+          break;
+        case 'center-right':
+          x = CANVAS_WIDTH - imgWidth - margin;
+          y = (CANVAS_HEIGHT - imgHeight) / 2;
+          break;
+        case 'center':
+        default:
+          x = (CANVAS_WIDTH - imgWidth) / 2;
+          y = (CANVAS_HEIGHT - imgHeight) / 2;
+          break;
+      }
     }
 
     this.ctx.save();
     this.ctx.globalAlpha = opacity;
     this.ctx.drawImage(this.overlayImage, x, y, imgWidth, imgHeight);
     this.ctx.restore();
+  }
+
+  getOverlayOptions(): OverlayOptions {
+    return { ...this.overlayOptions };
   }
 }

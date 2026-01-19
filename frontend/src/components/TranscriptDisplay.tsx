@@ -1,5 +1,10 @@
 import { useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mic } from 'lucide-react';
 import { useAI } from '../contexts/AIContext';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 interface TranscriptDisplayProps {
   className?: string;
@@ -10,7 +15,6 @@ export function TranscriptDisplay({ className = '', maxHeight = '200px' }: Trans
   const { transcript, isAIAvailable } = useAI();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new transcript arrives
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
@@ -19,49 +23,70 @@ export function TranscriptDisplay({ className = '', maxHeight = '200px' }: Trans
 
   if (!isAIAvailable) {
     return (
-      <div className={`bg-gray-800/50 rounded-lg p-3 ${className}`}>
-        <div className="flex items-center gap-2 text-gray-500 text-sm">
-          <span className="w-2 h-2 bg-gray-500 rounded-full" />
-          <span>AI transcription unavailable</span>
-        </div>
-      </div>
+      <Card className={cn('bg-card/50', className)}>
+        <CardContent className="p-3">
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <span className="w-2 h-2 bg-muted-foreground rounded-full" />
+            <span>AI transcription unavailable</span>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className={`bg-gray-800 rounded-lg overflow-hidden ${className}`}>
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-700 bg-gray-800/80">
-        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        <span className="text-sm font-medium text-gray-300">Live Transcript</span>
-      </div>
+    <Card className={cn('overflow-hidden', className)}>
+      <CardHeader className="py-2 px-4 border-b border-border bg-card/80">
+        <div className="flex items-center gap-2">
+          <motion.span
+            animate={{ scale: [1, 1.2, 1] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+            className="w-2 h-2 bg-success rounded-full"
+          />
+          <CardTitle className="text-sm font-medium text-muted-foreground">Live Transcript</CardTitle>
+        </div>
+      </CardHeader>
 
-      <div
+      <CardContent
         ref={containerRef}
         className="p-4 overflow-y-auto"
         style={{ maxHeight }}
       >
-        {transcript.length === 0 ? (
-          <div className="flex items-center justify-center h-16 text-gray-500">
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-              <span>Waiting for speech...</span>
+        <AnimatePresence mode="popLayout">
+          {transcript.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center justify-center h-16 text-muted-foreground"
+            >
+              <div className="flex items-center gap-2">
+                <Mic className="w-5 h-5 animate-pulse" />
+                <span>Waiting for speech...</span>
+              </div>
+            </motion.div>
+          ) : (
+            <div className="space-y-3">
+              {transcript.map((segment, index) => (
+                <motion.p
+                  key={segment.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index === transcript.length - 1 ? 0.1 : 0 }}
+                  className="text-base text-foreground leading-relaxed"
+                >
+                  {segment.text}
+                  {segment.confidence !== undefined && segment.confidence < 0.8 && (
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      low confidence
+                    </Badge>
+                  )}
+                </motion.p>
+              ))}
             </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {transcript.map((segment) => (
-              <p key={segment.id} className="text-base text-gray-200 leading-relaxed">
-                {segment.text}
-                {segment.confidence !== undefined && segment.confidence < 0.8 && (
-                  <span className="ml-2 text-xs text-gray-500">(low confidence)</span>
-                )}
-              </p>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+          )}
+        </AnimatePresence>
+      </CardContent>
+    </Card>
   );
 }
