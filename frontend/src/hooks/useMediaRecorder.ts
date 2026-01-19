@@ -23,6 +23,8 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const audioChunksRef = useRef<Blob[]>([]);  // Accumulated audio chunks for transcription
+  const transcriptionTimerRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -104,25 +106,53 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
     };
 
     // Create audio-only recorder for transcription
+    // Strategy: Restart recorder every 5s to get complete WebM files with proper headers
     if (options.onDataAvailable && audioStream) {
       const audioMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
 
-      const audioRecorder = new MediaRecorder(audioStream, {
-        mimeType: audioMimeType,
-        audioBitsPerSecond: 128000,
-      });
+      // Reset accumulated chunks
+      audioChunksRef.current = [];
 
-      audioRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          console.log('[MediaRecorder] Audio chunk available:', e.data.size, 'bytes, type:', e.data.type);
-          options.onDataAvailable!(e.data);
-        }
+      const createAndStartRecorder = () => {
+        const audioRecorder = new MediaRecorder(audioStream, {
+          mimeType: audioMimeType,
+          audioBitsPerSecond: 128000,
+        });
+
+        audioRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            audioChunksRef.current.push(e.data);
+          }
+        };
+
+        audioRecorder.onstop = () => {
+          // When recorder stops, send the complete recording
+          if (audioChunksRef.current.length > 0) {
+            const completeBlob = new Blob(audioChunksRef.current, { type: audioMimeType });
+            console.log('[MediaRecorder] Sending complete audio:', completeBlob.size, 'bytes');
+            options.onDataAvailable!(completeBlob);
+            // Reset for next recording cycle
+            audioChunksRef.current = [];
+          }
+        };
+
+        audioRecorderRef.current = audioRecorder;
+        audioRecorder.start();
       };
 
-      audioRecorderRef.current = audioRecorder;
-      audioRecorder.start(15000); // Send audio chunks every 15 seconds for better transcription
+      // Start initial recorder
+      createAndStartRecorder();
+
+      // Every 5 seconds: stop current recorder (triggers send), start new one
+      transcriptionTimerRef.current = window.setInterval(() => {
+        if (audioRecorderRef.current && audioRecorderRef.current.state === 'recording') {
+          audioRecorderRef.current.stop();  // This triggers onstop which sends the audio
+          // Start a new recorder for the next chunk
+          createAndStartRecorder();
+        }
+      }, 5000);
     }
 
     recorder.onstop = () => {
@@ -175,6 +205,14 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
       audioRecorderRef.current.stop();
       audioRecorderRef.current = null;
     }
+
+    if (transcriptionTimerRef.current) {
+      clearInterval(transcriptionTimerRef.current);
+      transcriptionTimerRef.current = null;
+    }
+
+    // Clear accumulated audio chunks
+    audioChunksRef.current = [];
 
     if (timerRef.current) {
       clearInterval(timerRef.current);

@@ -50,7 +50,7 @@ export function SuggestionTray({ onInsert, onClear, hasOverlay, isGenerating = f
                   </div>
                 ) : null}
                 <div className="min-w-0">
-                  <p className="text-white font-medium truncate">
+                  <p className="text-white font-medium line-clamp-2" title={currentSuggestion.text}>
                     {currentSuggestion.text}
                   </p>
                   <p className="text-sm text-gray-400">

@@ -1,7 +1,10 @@
+import asyncio
 import base64
+import colorsys
 import io
 import json
 import os
+import tempfile
 import uuid
 from typing import Optional
 from pathlib import Path
@@ -17,28 +20,81 @@ GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 
 # Model IDs
 IMAGE_MODEL = "gemini-3-pro-image-preview"
-TRANSCRIPTION_MODEL = "gemini-3-pro-preview"  # Better for audio transcription
 LLM_MODEL = "gemini-3-flash-preview"
 
 
-def chroma_key_and_crop(image_bytes: bytes, tolerance: int = 60) -> bytes:
-    """Remove green background and crop to content."""
+def chroma_key_and_crop(image_bytes: bytes) -> bytes:
+    """Remove green background using HSV color space and crop to content.
+
+    Uses HSV instead of RGB for better green detection:
+    - Hue isolates the color (green = ~80-160° on color wheel, or 0.22-0.44 in 0-1 range)
+    - Saturation filters out gray/white pixels that might have green hue
+    - Value filters out very dark pixels
+    """
     img = Image.open(io.BytesIO(image_bytes)).convert('RGBA')
     pixels = img.load()
     width, height = img.size
 
-    # Find bounding box of non-green pixels and make green transparent
-    min_x, min_y, max_x, max_y = width, height, 0, 0
+    # HSV thresholds for green detection
+    HUE_MIN = 0.22  # ~80° (cyan-green boundary)
+    HUE_MAX = 0.44  # ~160° (green-yellow boundary)
+    SAT_MIN = 0.3   # Filter out desaturated pixels
+    VAL_MIN = 0.2   # Filter out very dark pixels
+
+    # First pass: identify green pixels and build alpha map
+    alpha_map = [[255] * width for _ in range(height)]
 
     for y in range(height):
         for x in range(width):
             r, g, b, a = pixels[x, y]
-            # Check if pixel is chroma key green (high green, low red/blue)
-            is_green = g > 200 and r < tolerance and b < tolerance
+
+            # Convert RGB (0-255) to normalized (0-1) for colorsys
+            r_norm, g_norm, b_norm = r / 255.0, g / 255.0, b / 255.0
+            h, s, v = colorsys.rgb_to_hsv(r_norm, g_norm, b_norm)
+
+            # Check if pixel is in green range
+            is_green = (HUE_MIN <= h <= HUE_MAX and s >= SAT_MIN and v >= VAL_MIN)
+
             if is_green:
-                pixels[x, y] = (0, 0, 0, 0)  # Make transparent
+                alpha_map[y][x] = 0
             else:
-                # Track bounding box of non-green content
+                alpha_map[y][x] = 255
+
+    # Second pass: edge feathering for anti-aliased edges
+    # Check neighbors to create gradual alpha for edge pixels
+    feather_radius = 2
+    for y in range(height):
+        for x in range(width):
+            if alpha_map[y][x] == 255:
+                # Count nearby transparent (green) pixels
+                green_neighbors = 0
+                total_neighbors = 0
+                for dy in range(-feather_radius, feather_radius + 1):
+                    for dx in range(-feather_radius, feather_radius + 1):
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < height and 0 <= nx < width:
+                            total_neighbors += 1
+                            if alpha_map[ny][nx] == 0:
+                                green_neighbors += 1
+
+                # If this non-green pixel is near green pixels, feather the edge
+                if green_neighbors > 0 and total_neighbors > 0:
+                    green_ratio = green_neighbors / total_neighbors
+                    # Reduce alpha based on proximity to green (more green neighbors = more transparent)
+                    if green_ratio > 0.5:
+                        alpha_map[y][x] = int(255 * (1 - green_ratio * 0.8))
+
+    # Apply alpha map and find bounding box
+    min_x, min_y, max_x, max_y = width, height, 0, 0
+
+    for y in range(height):
+        for x in range(width):
+            r, g, b, _ = pixels[x, y]
+            new_alpha = alpha_map[y][x]
+            pixels[x, y] = (r, g, b, new_alpha)
+
+            if new_alpha > 0:
+                # Track bounding box of non-transparent content
                 min_x = min(min_x, x)
                 min_y = min(min_y, y)
                 max_x = max(max_x, x)
@@ -98,18 +154,130 @@ class AIService:
         """Check if the AI service is ready to use."""
         return self._initialized and is_ai_available() and self._client is not None
 
+    async def _detect_volume(self, audio_bytes: bytes, suffix: str = '.wav') -> float:
+        """Detect mean volume of audio using ffmpeg. Returns mean volume in dB."""
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as input_file:
+            input_file.write(audio_bytes)
+            input_path = input_file.name
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                '/usr/bin/ffmpeg', '-i', input_path,
+                '-af', 'volumedetect',
+                '-f', 'null', '-',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await process.communicate()
+
+            # Parse mean volume from ffmpeg output
+            mean_volume = -91.0  # Default to very quiet (silence)
+            stderr_text = stderr.decode('utf-8', errors='ignore')
+            for line in stderr_text.split('\n'):
+                if 'mean_volume:' in line:
+                    try:
+                        parts = line.split('mean_volume:')[1].strip().split()
+                        mean_volume = float(parts[0])
+                    except (IndexError, ValueError):
+                        pass
+
+            return mean_volume
+        finally:
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+
+    async def _convert_to_wav(self, webm_bytes: bytes) -> tuple[bytes, float]:
+        """Convert WebM audio to WAV using ffmpeg. Returns (wav_bytes, mean_volume_db)."""
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as input_file:
+            input_file.write(webm_bytes)
+            input_path = input_file.name
+
+        output_path = input_path.replace('.webm', '.wav')
+
+        try:
+            # Convert to 16kHz mono WAV and detect volume in one pass
+            process = await asyncio.create_subprocess_exec(
+                '/usr/bin/ffmpeg', '-y', '-i', input_path,
+                '-ar', '16000',  # 16kHz sample rate
+                '-ac', '1',      # Mono
+                '-af', 'volumedetect',
+                '-f', 'wav',
+                output_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await process.communicate()
+            stderr_text = stderr.decode('utf-8', errors='ignore')
+
+            # Check for ffmpeg errors
+            if process.returncode != 0:
+                print(f"[FFmpeg] Conversion failed (exit {process.returncode})", flush=True)
+                print(f"[FFmpeg] stderr: {stderr_text[-500:]}", flush=True)
+                # Return empty audio with silence indicator
+                return b'', -91.0
+
+            # Parse mean volume from ffmpeg output
+            mean_volume = -91.0  # Default to very quiet (silence)
+            for line in stderr_text.split('\n'):
+                if 'mean_volume:' in line:
+                    try:
+                        # Extract the dB value (e.g., "mean_volume: -25.3 dB")
+                        parts = line.split('mean_volume:')[1].strip().split()
+                        mean_volume = float(parts[0])
+                    except (IndexError, ValueError):
+                        pass
+
+            if not os.path.exists(output_path):
+                print(f"[FFmpeg] Output file not created!", flush=True)
+                return b'', -91.0
+
+            with open(output_path, 'rb') as f:
+                wav_bytes = f.read()
+
+            if len(wav_bytes) < 100:
+                print(f"[FFmpeg] Output too small: {len(wav_bytes)} bytes", flush=True)
+
+            return wav_bytes, mean_volume
+        finally:
+            # Clean up temp files
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
     async def transcribe_audio_chunk(self, audio_bytes: bytes, mime_type: str = "audio/webm") -> dict:
         """Transcribe an audio chunk using Gemini."""
         if not self.is_ready:
             return {"error": "AI service not available", "text": ""}
 
         try:
+            input_size = len(audio_bytes)
+            print(f"[Transcribe] Input: {input_size} bytes, mime: {mime_type}", flush=True)
+
+            # Convert WebM to WAV (Gemini doesn't officially support WebM)
+            # Also get volume level to detect silence
+            mean_volume = -91.0
+            if "webm" in mime_type.lower():
+                audio_bytes, mean_volume = await self._convert_to_wav(audio_bytes)
+                mime_type = "audio/wav"
+                print(f"[Transcribe] Converted to WAV: {len(audio_bytes)} bytes, volume: {mean_volume:.1f} dB", flush=True)
+            else:
+                # For non-WebM (e.g., direct WAV), still detect volume
+                mean_volume = await self._detect_volume(audio_bytes, suffix='.wav')
+                print(f"[Transcribe] Direct WAV, volume: {mean_volume:.1f} dB", flush=True)
+
+            # Skip transcription if audio is too quiet (likely silence/noise)
+            # Typical speech is -20 to -35 dB, quiet speech -40 to -50 dB, silence < -60 dB
+            SILENCE_THRESHOLD_DB = -55.0
+            if mean_volume < SILENCE_THRESHOLD_DB:
+                print(f"[Transcribe] Skipping - too quiet ({mean_volume:.1f} dB < {SILENCE_THRESHOLD_DB} dB)", flush=True)
+                return {"text": "", "error": None, "skipped": "silence"}
+
             response = await self._client.aio.models.generate_content(
-                model=TRANSCRIPTION_MODEL,
+                model=LLM_MODEL,  # Flash is fine with correct audio format
                 contents=[
-                    "Generate a verbatim transcript of this audio. "
-                    "Include all spoken words exactly as said. "
-                    "If there is no speech or audio is silent, return exactly: [silence]",
+                    "Transcribe this audio verbatim. Return only the spoken words. "
+                    "If silent or no speech, return empty string.",
                     types.Part.from_bytes(
                         data=audio_bytes,
                         mime_type=mime_type
@@ -118,8 +286,8 @@ class AIService:
             )
 
             text = response.text.strip() if response.text else ""
-            # Filter out silence markers
-            if text == "[silence]" or not text:
+            # Filter out silence markers or empty responses
+            if text == "[silence]" or text.lower() == "empty string" or not text:
                 return {"text": "", "error": None}
             return {"text": text, "error": None}
         except Exception as e:
