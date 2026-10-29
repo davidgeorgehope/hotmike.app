@@ -18,7 +18,7 @@ def test_model_ids():
     print(f"  LLM_MODEL: {LLM_MODEL}")
 
     assert IMAGE_MODEL == "grok-imagine-image-2.0", f"Wrong IMAGE_MODEL: {IMAGE_MODEL}"
-    assert LLM_MODEL == "grok-4.3", f"Wrong LLM_MODEL: {LLM_MODEL}"
+    assert LLM_MODEL == "grok-4.7", f"Wrong LLM_MODEL: {LLM_MODEL}"
     print("[PASS] Model IDs are correct")
 
 
@@ -38,7 +38,7 @@ def test_service_initialization():
 
 
 async def test_llm_generation(service: AIService):
-    """Test LLM text generation with grok-4.3."""
+    """Test LLM text generation with grok-4.7."""
     if not service.is_ready:
         print("\n[SKIP] LLM test - service not ready")
         return

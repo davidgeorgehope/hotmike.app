@@ -23,7 +23,7 @@ GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 # Model IDs
 XAI_BASE_URL = "https://api.x.ai/v1"
 IMAGE_MODEL = "grok-imagine-image-2.0"
-LLM_MODEL = "grok-4.3"
+LLM_MODEL = "grok-4.7"
 STT_MODEL = "grok-voice-transcribe-2.0"
 
 
