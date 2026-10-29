@@ -11,8 +11,8 @@ if env_path.exists():
 
 
 class Settings(BaseSettings):
-    # Gemini AI settings
-    GEMINI_API_KEY: str = ""
+    # xAI settings
+    XAI_API_KEY: str = ""
     AI_FEATURES_ENABLED: bool = True
     AI_CALLS_PER_MINUTE: int = 3
     AI_CALLS_PER_SESSION: int = 20
@@ -37,7 +37,7 @@ def get_settings() -> Settings:
 def is_ai_available() -> bool:
     """Check if AI features are available and configured."""
     settings = get_settings()
-    return bool(settings.GEMINI_API_KEY and settings.AI_FEATURES_ENABLED)
+    return bool(settings.XAI_API_KEY and settings.AI_FEATURES_ENABLED)
 
 
 def get_ai_status() -> dict:
@@ -46,7 +46,7 @@ def get_ai_status() -> dict:
     return {
         "available": is_ai_available(),
         "enabled": settings.AI_FEATURES_ENABLED,
-        "configured": bool(settings.GEMINI_API_KEY),
+        "configured": bool(settings.XAI_API_KEY),
         "rate_limits": {
             "calls_per_minute": settings.AI_CALLS_PER_MINUTE,
             "calls_per_session": settings.AI_CALLS_PER_SESSION,

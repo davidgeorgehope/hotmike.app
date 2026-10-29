@@ -17,8 +17,8 @@ def test_model_ids():
     print(f"  IMAGE_MODEL: {IMAGE_MODEL}")
     print(f"  LLM_MODEL: {LLM_MODEL}")
 
-    assert IMAGE_MODEL == "gemini-3-pro-image-preview", f"Wrong IMAGE_MODEL: {IMAGE_MODEL}"
-    assert LLM_MODEL == "gemini-3-flash-preview", f"Wrong LLM_MODEL: {LLM_MODEL}"
+    assert IMAGE_MODEL == "grok-imagine-image-2.0", f"Wrong IMAGE_MODEL: {IMAGE_MODEL}"
+    assert LLM_MODEL == "grok-4.3", f"Wrong LLM_MODEL: {LLM_MODEL}"
     print("[PASS] Model IDs are correct")
 
 
@@ -32,13 +32,13 @@ def test_service_initialization():
         print("[PASS] AI service initialized successfully")
         print(f"  is_ready: {service.is_ready}")
     else:
-        print("[WARN] AI service failed to initialize (check GEMINI_API_KEY)")
+        print("[WARN] AI service failed to initialize (check XAI_API_KEY)")
 
     return service
 
 
 async def test_llm_generation(service: AIService):
-    """Test LLM text generation with gemini-3-flash-preview."""
+    """Test LLM text generation with grok-4.3."""
     if not service.is_ready:
         print("\n[SKIP] LLM test - service not ready")
         return
@@ -57,7 +57,7 @@ async def test_llm_generation(service: AIService):
 
 
 async def test_image_generation(service: AIService):
-    """Test image generation with gemini-3-pro-image-preview."""
+    """Test image generation with grok-imagine-image-2.0."""
     if not service.is_ready:
         print("\n[SKIP] Image generation test - service not ready")
         return
