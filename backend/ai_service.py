@@ -10,8 +10,10 @@ from typing import Optional
 from pathlib import Path
 
 from PIL import Image
-from google import genai
-from google.genai import types
+import base64
+
+import httpx
+from openai import AsyncOpenAI
 
 from config import get_settings, is_ai_available
 
@@ -19,8 +21,10 @@ from config import get_settings, is_ai_available
 GENERATED_IMAGES_DIR = Path(__file__).parent / "data" / "generated_images"
 
 # Model IDs
-IMAGE_MODEL = "gemini-3-pro-image-preview"
-LLM_MODEL = "gemini-3-flash-preview"
+XAI_BASE_URL = "https://api.x.ai/v1"
+IMAGE_MODEL = "grok-imagine-image-2.0"
+LLM_MODEL = "grok-4.3"
+STT_MODEL = "grok-voice-transcribe-2.0"
 
 
 def chroma_key_and_crop(image_bytes: bytes) -> bytes:
@@ -124,7 +128,7 @@ def chroma_key_and_crop(image_bytes: bytes) -> bytes:
 class AIService:
     _instance: Optional['AIService'] = None
     _initialized: bool = False
-    _client: Optional[genai.Client] = None
+    _client: Optional[AsyncOpenAI] = None
 
     def __new__(cls) -> 'AIService':
         if cls._instance is None:
@@ -132,16 +136,16 @@ class AIService:
         return cls._instance
 
     def initialize(self) -> bool:
-        """Configure the Gemini API with the API key."""
+        """Configure the xAI client with the API key."""
         if self._initialized:
             return True
 
         settings = get_settings()
-        if not settings.GEMINI_API_KEY:
+        if not settings.XAI_API_KEY:
             return False
 
         try:
-            self._client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            self._client = AsyncOpenAI(api_key=settings.XAI_API_KEY, base_url=XAI_BASE_URL)
             # Ensure images directory exists
             GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
             self._initialized = True
@@ -153,6 +157,36 @@ class AIService:
     def is_ready(self) -> bool:
         """Check if the AI service is ready to use."""
         return self._initialized and is_ai_available() and self._client is not None
+
+    async def _text(self, prompt: str) -> str:
+        response = await self._client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    async def _image(self, prompt: str, aspect_ratio: str = "16:9") -> Optional[bytes]:
+        response = await self._client.images.generate(
+            model=IMAGE_MODEL,
+            prompt=prompt,
+            response_format="b64_json",
+            extra_body={"aspect_ratio": aspect_ratio},
+        )
+        if response.data and response.data[0].b64_json:
+            return base64.b64decode(response.data[0].b64_json)
+        return None
+
+    async def _transcribe(self, audio_bytes: bytes, mime_type: str) -> str:
+        ext = "wav" if "wav" in mime_type else mime_type.split("/")[-1]
+        async with httpx.AsyncClient(timeout=120) as http:
+            resp = await http.post(
+                f"{XAI_BASE_URL}/stt",
+                headers={"Authorization": f"Bearer {self._client.api_key}"},
+                data={"model": STT_MODEL},
+                files={"file": (f"audio.{ext}", audio_bytes, mime_type)},
+            )
+        resp.raise_for_status()
+        return (resp.json().get("text") or "").strip()
 
     async def _detect_volume(self, audio_bytes: bytes, suffix: str = '.wav') -> float:
         """Detect mean volume of audio using ffmpeg. Returns mean volume in dB."""
@@ -246,7 +280,7 @@ class AIService:
                 os.unlink(output_path)
 
     async def transcribe_audio_chunk(self, audio_bytes: bytes, mime_type: str = "audio/webm") -> dict:
-        """Transcribe an audio chunk using Gemini."""
+        """Transcribe an audio chunk using xAI speech-to-text."""
         if not self.is_ready:
             return {"error": "AI service not available", "text": ""}
 
@@ -254,7 +288,7 @@ class AIService:
             input_size = len(audio_bytes)
             print(f"[Transcribe] Input: {input_size} bytes, mime: {mime_type}", flush=True)
 
-            # Convert WebM to WAV (Gemini doesn't officially support WebM)
+            # Convert WebM to WAV 
             # Also get volume level to detect silence
             mean_volume = -91.0
             if "webm" in mime_type.lower():
@@ -273,19 +307,7 @@ class AIService:
                 print(f"[Transcribe] Skipping - too quiet ({mean_volume:.1f} dB < {SILENCE_THRESHOLD_DB} dB)", flush=True)
                 return {"text": "", "error": None, "skipped": "silence"}
 
-            response = await self._client.aio.models.generate_content(
-                model=LLM_MODEL,  # Flash is fine with correct audio format
-                contents=[
-                    "Transcribe this audio verbatim. Return only the spoken words. "
-                    "If silent or no speech, return empty string.",
-                    types.Part.from_bytes(
-                        data=audio_bytes,
-                        mime_type=mime_type
-                    ),
-                ]
-            )
-
-            text = response.text.strip() if response.text else ""
+            text = await self._transcribe(audio_bytes, mime_type)
             # Filter out silence markers or empty responses
             if text == "[silence]" or text.lower() == "empty string" or not text:
                 return {"text": "", "error": None}
@@ -318,11 +340,7 @@ Respond in this exact JSON format:
 
 Only suggest a visual if it would genuinely add value. Return should_suggest: false if the content doesn't warrant a visual."""
 
-            response = await self._client.aio.models.generate_content(
-                model=LLM_MODEL,
-                contents=prompt
-            )
-            text = response.text.strip() if response.text else ""
+            text = await self._text(prompt)
 
             # Try to parse as JSON
             import json
@@ -379,11 +397,7 @@ Position guidelines:
 
 Only include genuinely useful moments. Return empty moments array if none found."""
 
-            response = await self._client.aio.models.generate_content(
-                model=LLM_MODEL,
-                contents=prompt
-            )
-            text = response.text.strip() if response.text else ""
+            text = await self._text(prompt)
 
             # Try to parse as JSON
             import json
@@ -401,37 +415,18 @@ Only include genuinely useful moments. Return empty moments array if none found.
             return []
 
     async def generate_image(self, prompt: str, aspect_ratio: str = "16:9") -> dict:
-        """Generate an image using Gemini 3 Pro Image."""
+        """Generate an image using xAI grok-imagine."""
         if not self.is_ready:
             return {"error": "AI service not available", "image_url": None, "filename": None}
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"]
-                )
-            )
-
-            # Extract image from response
-            image_bytes = None
-            if hasattr(response, 'candidates'):
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                        for part in candidate.content.parts:
-                            if hasattr(part, 'inline_data') and part.inline_data:
-                                if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                    image_bytes = part.inline_data.data
-                                    break
-                    if image_bytes:
-                        break
+            image_bytes = await self._image(prompt, aspect_ratio)
 
             if not image_bytes:
                 return {"error": "No image generated", "image_url": None, "filename": None}
 
             # Save to file
-            filename = f"{uuid.uuid4()}.png"
+            filename = f"{uuid.uuid4()}.jpg"
             filepath = GENERATED_IMAGES_DIR / filename
 
             with open(filepath, 'wb') as f:
@@ -483,11 +478,7 @@ Consider:
 Respond ONLY with valid JSON, no other text:
 {{"position": "bottom-right", "scale": 0.4}}"""
 
-            response = await self._client.aio.models.generate_content(
-                model=LLM_MODEL,
-                contents=positioning_prompt
-            )
-            text = response.text.strip() if response.text else ""
+            text = await self._text(positioning_prompt)
 
             # Remove markdown code blocks if present
             if text.startswith('```'):
@@ -546,26 +537,7 @@ Requirements:
 - Do NOT use any green colors in the name card design"""
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"]
-                )
-            )
-
-            # Extract image from response
-            image_bytes = None
-            if hasattr(response, 'candidates'):
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                        for part in candidate.content.parts:
-                            if hasattr(part, 'inline_data') and part.inline_data:
-                                if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                    image_bytes = part.inline_data.data
-                                    break
-                    if image_bytes:
-                        break
+            image_bytes = await self._image(prompt, "16:9")
 
             if not image_bytes:
                 return {"error": "No image generated", "image_url": None, "filename": None}
